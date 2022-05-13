@@ -1,5 +1,6 @@
-use std::io::Write;
 use std::time::Duration;
+
+use pegasus_rs::ppba::{AstronomicalDevice, PowerBoxDevice};
 
 mod utils {
     use serialport::{available_ports, SerialPortType, UsbPortInfo};
@@ -21,56 +22,36 @@ mod utils {
     }
 }
 fn main() {
-    let devices = utils::look_for_devices("PPBA");
-    let command = "P#\n";
+    let found = utils::look_for_devices("PPBA");
+    let mut devices: Vec<PowerBoxDevice> = Vec::new();
 
-    if devices.is_empty() {
+    if found.is_empty() {
         println!("empty");
     } else {
-        let rate = 0;
-        let builder = serialport::new(&devices[0].0, 9600);
-        let mut port = builder.open().unwrap();
+        for dev in found {
+            let mut device_name = String::from("PegausPowerBoxAdvanced");
+            println!("name: {}", dev.0);
+            println!("info: {:?}", dev.1);
 
-        loop {
-            match port.write(&command.as_bytes()) {
-                Ok(_) => {
-                    println!("Sent: {}", &command);
-                    std::io::stdout().flush().unwrap();
-                    let mut final_buf: Vec<u8> = Vec::new();
-                    println!("Receiving data");
-
-                    loop {
-                        let mut read_buf = [0xAA; 1];
-
-                        match port.read(read_buf.as_mut_slice()) {
-                            Ok(t) => {
-                                println!("We have {} bytes to read", t);
-                                println!("We read: {:?}", &read_buf);
-                                let byte = read_buf[0];
-                                if byte == '\n' as u8 {
-                                    break;
-                                }
-                                final_buf.push(byte);
-
-                                println!("Actual final buffer: {:?}", &final_buf);
-                            }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => (),
-                            Err(e) => eprintln!("{:?}", e),
-                        }
-                    }
-                    println!(
-                        "We read: {:?} which as string is {}",
-                        &final_buf,
-                        std::str::from_utf8(&final_buf).unwrap()
-                    );
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => (),
-                Err(e) => eprintln!("{:?}", e),
+            if let Some(serial) = dev.1.serial_number {
+                device_name = device_name + &serial
             }
-            if rate == 0 {
-                return;
+            if let Ok(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600) {
+                devices.push(device)
+            } else {
+                println!("Cannot start communication with {}", &device_name);
             }
-            std::thread::sleep(Duration::from_millis((1000.0 / (rate as f32)) as u64));
         }
     }
+
+    for mut d in devices {
+        let props = d.get_properties();
+        for prop in &props {
+            println!(
+                "name: {} | value: {} | kind: {} | read_only: {}",
+                prop.name, prop.value, prop.kind, prop.read_only
+            );
+        }
+    }
+    std::thread::sleep(Duration::from_millis(5000));
 }
