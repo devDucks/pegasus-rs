@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use pegasus_rs::ppba::{AstronomicalDevice, PowerBoxDevice};
 
 mod utils {
@@ -26,7 +24,7 @@ fn main() {
     let mut devices: Vec<PowerBoxDevice> = Vec::new();
 
     if found.is_empty() {
-        println!("empty");
+        println!("No Pegasus PPBA found");
     } else {
         for dev in found {
             let mut device_name = String::from("PegausPowerBoxAdvanced");
@@ -45,13 +43,30 @@ fn main() {
     }
 
     for mut d in devices {
-        let props = d.get_properties();
-        for prop in &props {
+        println!("ID: {}", d.id);
+
+        for prop in d.get_properties() {
+            println!(
+                "name: {} | value: {} | kind: {} | read_only: {}",
+                prop.name, prop.value, prop.kind, prop.read_only
+            );
+        }
+
+        match d.update_property("adjustable_output", "0") {
+            Ok(_) => println!("Prop adjustable_output updated correctly"),
+            Err(e) => println!("Err: {:?}", e),
+        }
+
+        match d.update_property("quadport_status", "1") {
+            Ok(_) => println!("Prop quadport_status updated correctly"),
+            Err(e) => println!("Err: {:?}", e),
+        }
+
+        for prop in d.get_properties() {
             println!(
                 "name: {} | value: {} | kind: {} | read_only: {}",
                 prop.name, prop.value, prop.kind, prop.read_only
             );
         }
     }
-    std::thread::sleep(Duration::from_millis(5000));
 }
