@@ -51,6 +51,13 @@ pub struct BaseDevice {
     port: COMPort,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum Permission {
+    ReadOnly = 0,
+    WriteOnly = 1,
+    ReadWrite = 2,
+}
+
 pub type PowerBoxDevice = BaseDevice;
 
 #[derive(Debug)]
@@ -88,33 +95,43 @@ impl BaseDevice {
         }
     }
 }
-const POWER_STATS: [(&str, &str); 4] = [
-    ("average_amps", "float"),
-    ("amps_hours", "float"),
-    ("watt_hours", "float"),
-    ("uptime", "integer"),
+const POWER_STATS: [(&str, &str, Permission); 4] = [
+    ("average_amps", "float", Permission::ReadOnly),
+    ("amps_hours", "float", Permission::ReadOnly),
+    ("watt_hours", "float", Permission::ReadOnly),
+    ("uptime", "integer", Permission::ReadOnly),
 ];
 
-const POWER_METRICS: [(&str, &str); 4] = [
-    ("total_current", "float"),
-    ("current_12V_output", "float"),
-    ("current_dewA", "float"),
-    ("current_dewB", "float"),
+const POWER_METRICS: [(&str, &str, Permission); 4] = [
+    ("total_current", "float", Permission::ReadOnly),
+    ("current_12V_output", "float", Permission::ReadOnly),
+    ("current_dewA", "float", Permission::ReadOnly),
+    ("current_dewB", "float", Permission::ReadOnly),
 ];
 
-const POWER_SENSOR_READINGS: [(&str, &str, bool); 12] = [
-    ("input_voltage", "float", true),
-    ("current", "float", true),
-    ("temp", "float", true),
-    ("humidity", "float", true),
-    ("dew_point", "float", true),
-    ("quadport_status", "boolean", false),
-    ("adj_output_status", "boolean", true),
-    ("dew1_power", "integer", true),
-    ("dew2_power", "integer", true),
-    ("autodew_bool", "boolean", true),
-    ("pwr_warn", "boolean", true),
-    ("adjustable_output", "integer", false),
+const POWER_SENSOR_READINGS: [(&str, &str, Permission); 12] = [
+    ("input_voltage", "float", Permission::ReadOnly),
+    ("current", "float", Permission::ReadOnly),
+    ("temp", "float", Permission::ReadOnly),
+    ("humidity", "float", Permission::ReadOnly),
+    ("dew_point", "float", Permission::ReadOnly),
+    ("quadport_status", "boolean", Permission::ReadWrite),
+    ("adj_output_status", "boolean", Permission::ReadOnly),
+    ("dew1_power", "integer", Permission::ReadWrite),
+    ("dew2_power", "integer", Permission::ReadWrite),
+    ("autodew_bool", "boolean", Permission::ReadOnly),
+    ("pwr_warn", "boolean", Permission::ReadOnly),
+    ("adjustable_output", "integer", Permission::ReadWrite),
+];
+
+const WRITE_ONLY_PROPERTIES: [(&str, &str, &str, Permission); 2] = [
+    ("reboot", "bool", "0", Permission::WriteOnly),
+    (
+        "power_status_on_boot",
+        "string",
+        "1111",
+        Permission::WriteOnly,
+    ),
 ];
 
 trait Pegasus {
@@ -123,6 +140,7 @@ trait Pegasus {
     fn power_consumption_and_stats(&mut self) -> Vec<Property>;
     fn power_metrics(&mut self) -> Vec<Property>;
     fn power_and_sensor_readings(&mut self) -> Vec<Property>;
+    fn create_write_only_properties(&mut self) -> Vec<Property>;
 }
 
 pub trait AstronomicalDevice {
@@ -136,6 +154,8 @@ pub trait AstronomicalDevice {
 impl AstronomicalDevice for PowerBoxDevice {
     fn init_props(&mut self) {
         let fw = self.firmware_version();
+        let wo_props = self.create_write_only_properties();
+
         for prop in self.power_consumption_and_stats() {
             self.properties.push(prop);
         }
@@ -143,6 +163,9 @@ impl AstronomicalDevice for PowerBoxDevice {
             self.properties.push(prop);
         }
         for prop in self.power_and_sensor_readings() {
+            self.properties.push(prop);
+        }
+        for prop in wo_props {
             self.properties.push(prop);
         }
         self.properties.push(fw);
@@ -168,21 +191,25 @@ impl AstronomicalDevice for PowerBoxDevice {
         }
     }
 
-    /// Updated the local value of a given property in the state machine
+    /// Updates the local value of a given property in the state machine
     fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError> {
         if let Some(prop_idx) = self.find_property_index(prop_name) {
             let r_prop = self.properties.get(prop_idx).unwrap();
-            if !r_prop.read_only {
-                match self.update_property_remote(prop_name, val) {
+            match r_prop.permission {
+                Permission::ReadOnly => Err(DeviceError::CannotUpdateReadOnlyProperty),
+                _ => match self.update_property_remote(prop_name, val) {
                     Ok(_) => {
                         let prop = self.properties.get_mut(prop_idx).unwrap();
+                        // Adjustable output is a special one, it can set both status AND power,
+                        // but 0 and 1 actually change adjustable_output_status
+                        if prop.name == "adjustable_output" && (val == "0" || val == "1") {
+                            return Ok(());
+                        }
                         prop.value = val.to_owned();
                         return Ok(());
                     }
                     Err(e) => return Err(e),
-                }
-            } else {
-                Err(DeviceError::CannotUpdateReadOnlyProperty)
+                },
             }
         } else {
             Err(DeviceError::UnknownProperty)
@@ -238,7 +265,6 @@ impl Pegasus for PowerBoxDevice {
         match self.port.write(&command) {
             Ok(_) => {
                 println!("Sent command: {}", std::str::from_utf8(&command).unwrap());
-
                 let mut final_buf: Vec<u8> = Vec::new();
                 println!("Receiving data");
 
@@ -255,7 +281,9 @@ impl Pegasus for PowerBoxDevice {
                                 break;
                             }
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => (),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                            return Err(DeviceError::Timeout)
+                        }
                         Err(e) => eprintln!("{:?}", e),
                     }
                 }
@@ -284,14 +312,14 @@ impl Pegasus for PowerBoxDevice {
                 name: "firmware_version".to_owned(),
                 value: fw,
                 kind: "string".to_owned(),
-                read_only: true,
+                permission: Permission::ReadOnly,
             }
         } else {
             Property {
                 name: "firmware_version".to_owned(),
                 value: "UNKNOWN".to_owned(),
                 kind: "string".to_owned(),
-                read_only: true,
+                permission: Permission::ReadOnly,
             }
         }
     }
@@ -308,7 +336,7 @@ impl Pegasus for PowerBoxDevice {
                     name: POWER_STATS[index].0.to_string(),
                     value: chunk.to_string(),
                     kind: POWER_STATS[index].1.to_string(),
-                    read_only: true,
+                    permission: Permission::ReadOnly,
                 })
             }
             props
@@ -329,7 +357,7 @@ impl Pegasus for PowerBoxDevice {
                     name: POWER_METRICS[index].0.to_string(),
                     value: chunk.to_string(),
                     kind: POWER_METRICS[index].1.to_string(),
-                    read_only: true,
+                    permission: Permission::ReadOnly,
                 })
             }
             props
@@ -349,12 +377,26 @@ impl Pegasus for PowerBoxDevice {
                     name: POWER_SENSOR_READINGS[index].0.to_string(),
                     value: chunk.to_string(),
                     kind: POWER_SENSOR_READINGS[index].1.to_string(),
-                    read_only: POWER_SENSOR_READINGS[index].2,
+                    permission: POWER_SENSOR_READINGS[index].2,
                 })
             }
             props
         } else {
             vec![]
         }
+    }
+
+    fn create_write_only_properties(&mut self) -> Vec<Property> {
+        let mut props = Vec::with_capacity(WRITE_ONLY_PROPERTIES.len());
+
+        for (name, kind, value, perm) in WRITE_ONLY_PROPERTIES {
+            props.push(Property {
+                name: name.to_string(),
+                value: value.to_string(),
+                kind: kind.to_string(),
+                permission: perm,
+            });
+        }
+        props
     }
 }
