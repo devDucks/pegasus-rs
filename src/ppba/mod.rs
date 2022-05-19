@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
-use log::{info, debug, error};
+use log::{debug, error, info};
 
 enum Command {
     /// Adjustable 12V Output SET command is P2:
@@ -266,7 +266,10 @@ impl Pegasus for PowerBoxDevice {
 
         match self.port.write(&command) {
             Ok(_) => {
-                info!("Sent command: {}", std::str::from_utf8(&command[..command.len() - 1]).unwrap());
+                info!(
+                    "Sent command: {}",
+                    std::str::from_utf8(&command[..command.len() - 1]).unwrap()
+                );
                 let mut final_buf: Vec<u8> = Vec::new();
                 debug!("Receiving data");
 
