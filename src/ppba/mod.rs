@@ -4,11 +4,16 @@ use serialport::COMPort;
 #[cfg(unix)]
 use serialport::TTYPort;
 use std::io::{Read, Write};
+use std::time::Duration;
 use uuid::Uuid;
 
 enum Command {
     /// Adjustable 12V Output SET command is P2:
     Adj12VOutput = 0x50323a,
+    /// DewA power SET command is P3:
+    Dew1Power = 0x50333a,
+    /// DewB power SET command is P4:
+    Dew2Power = 0x50343a,
     /// Status command serial code is P#
     Status = 0x5023,
     /// Firmware version command serial code is PV
@@ -60,8 +65,7 @@ pub enum DeviceError {
 
 impl BaseDevice {
     pub fn new(name: &str, address: &str, baud: u32) -> Result<Self, DeviceError> {
-        // TODO: Add serial timeout
-        let builder = serialport::new(address, baud);
+        let builder = serialport::new(address, baud).timeout(Duration::from_millis(500));
 
         if let Ok(port_) = builder.open_native() {
             let mut dev = Self {
