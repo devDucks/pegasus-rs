@@ -91,6 +91,7 @@ fn main() {
 
     if found.is_empty() {
         error!("No Pegasus PPBA found");
+	return
     } else {
         for dev in found {
             let mut device_name = String::from("PegausPowerBoxAdvanced");
