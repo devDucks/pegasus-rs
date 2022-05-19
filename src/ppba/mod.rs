@@ -7,6 +7,8 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
+use log::{info, debug, error};
+
 enum Command {
     /// Adjustable 12V Output SET command is P2:
     Adj12VOutput = 0x50323a,
@@ -264,9 +266,9 @@ impl Pegasus for PowerBoxDevice {
 
         match self.port.write(&command) {
             Ok(_) => {
-                println!("Sent command: {}", std::str::from_utf8(&command).unwrap());
+                info!("Sent command: {}", std::str::from_utf8(&command[..command.len() - 1]).unwrap());
                 let mut final_buf: Vec<u8> = Vec::new();
-                println!("Receiving data");
+                debug!("Receiving data");
 
                 loop {
                     let mut read_buf = [0xAA; 1];
@@ -289,7 +291,7 @@ impl Pegasus for PowerBoxDevice {
                 }
                 // Strip the carriage return from the response
                 let response = std::str::from_utf8(&final_buf[..&final_buf.len() - 2]).unwrap();
-                println!("RESPONSE: {}", response);
+                debug!("RESPONSE: {}", response);
                 let resp: Vec<&str> = response.split(":").collect();
 
                 if resp.len() > 1 && resp[1] == "ERR" {
@@ -300,7 +302,7 @@ impl Pegasus for PowerBoxDevice {
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceError::Timeout),
             Err(e) => {
-                println!("{:?}", e);
+                error!("{:?}", e);
                 Err(DeviceError::ComError)
             }
         }
@@ -326,7 +328,7 @@ impl Pegasus for PowerBoxDevice {
 
     fn power_consumption_and_stats(&mut self) -> Vec<Property> {
         if let Ok(stats) = self.send_command(Command::PowerConsumAndStats, None) {
-            println!("{}", stats);
+            debug!("POWER CONSUMPTIONS STATS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];
             let mut props = Vec::new();
@@ -347,7 +349,7 @@ impl Pegasus for PowerBoxDevice {
 
     fn power_metrics(&mut self) -> Vec<Property> {
         if let Ok(stats) = self.send_command(Command::PowerMetrics, None) {
-            println!("{}", stats);
+            debug!("POWER METRICS STATS:{}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..chunks.len() - 1];
             let mut props = Vec::new();
@@ -368,7 +370,7 @@ impl Pegasus for PowerBoxDevice {
 
     fn power_and_sensor_readings(&mut self) -> Vec<Property> {
         if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings, None) {
-            println!("{}", stats);
+            debug!("POWER AND SENSORS READINGS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];
             let mut props = Vec::new();

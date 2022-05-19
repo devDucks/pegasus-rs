@@ -11,6 +11,8 @@ serialport = "4.1"
 prost = "0.10"
 protobuf = "2.27"
 protobuf-codegen-pure = "2.27"
+log = "0.4"
+env_logger = "0.9"
 
 [dependencies.uuid]
 version = "1.0.0"
