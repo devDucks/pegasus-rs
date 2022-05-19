@@ -19,15 +19,19 @@ enum Command {
     PowerMetrics = 0x5043,
     /// Power and sensor reading serial code is PA
     PowerAndSensorReadings = 0x5041,
+    /// Power status on boot SET command is PE:
+    PowerStatusOnBoot = 0x50453a,
     /// Quad port boot status SET command is P1:
     QuadPortStatus = 0x50313a,
+    /// Reboot command is PF
+    Reboot = 0x5046,
 }
 
 pub struct Property {
     pub name: String,
     pub value: String,
     pub kind: String,
-    pub read_only: bool,
+    pub permission: Permission,
 }
 
 pub struct BaseDevice {
@@ -190,6 +194,22 @@ impl AstronomicalDevice for PowerBoxDevice {
             }
             "quadport_status" => {
                 self.send_command(Command::QuadPortStatus, Some(val))?;
+                Ok(())
+            }
+            "dew1_power" => {
+                self.send_command(Command::Dew1Power, Some(val))?;
+                Ok(())
+            }
+            "dew2_power" => {
+                self.send_command(Command::Dew2Power, Some(val))?;
+                Ok(())
+            }
+            "power_status_on_boot" => {
+                self.send_command(Command::PowerStatusOnBoot, Some(val))?;
+                Ok(())
+            }
+            "reboot" => {
+                self.send_command(Command::Reboot, None)?;
                 Ok(())
             }
             _ => Err(DeviceError::UnknownProperty),
