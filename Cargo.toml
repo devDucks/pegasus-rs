@@ -9,10 +9,10 @@ edition = "2021"
 hex = "0.4"
 serialport = "4.1"
 prost = "0.10"
-protobuf = "2.27"
-protobuf-codegen-pure = "2.27"
 log = "0.4"
 env_logger = "0.9"
+lightspeed = { git = "https://github.com/devducks/lightspeed", rev = "v0.1.0" }
+protobuf = "3.0"
 
 [dependencies.uuid]
 version = "1.0.0"

@@ -7,7 +7,10 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
+use lightspeed::props::Permission;
+use lightspeed::props::Property;
 use log::{debug, error, info};
+use protobuf::EnumOrUnknown;
 
 enum Command {
     /// Adjustable 12V Output SET command is P2:
@@ -34,13 +37,6 @@ enum Command {
     Reboot = 0x5046,
 }
 
-pub struct Property {
-    pub name: String,
-    pub value: String,
-    pub kind: String,
-    pub permission: Permission,
-}
-
 pub struct BaseDevice {
     pub id: Uuid,
     pub name: String,
@@ -53,12 +49,12 @@ pub struct BaseDevice {
     port: COMPort,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum Permission {
-    ReadOnly = 0,
-    WriteOnly = 1,
-    ReadWrite = 2,
-}
+// #[derive(Copy, Clone, Debug)]
+// pub enum Permission {
+//     ReadOnly = 0,
+//     WriteOnly = 1,
+//     ReadWrite = 2,
+// }
 
 pub type PowerBoxDevice = BaseDevice;
 
@@ -87,7 +83,7 @@ impl BaseDevice {
             };
             match dev.send_command(Command::Status, None) {
                 Ok(_) => {
-                    dev.init_props();
+                    dev.fetch_props();
                     Ok(dev)
                 }
                 Err(_) => Err(DeviceError::CannotConnect),
@@ -146,7 +142,7 @@ trait Pegasus {
 }
 
 pub trait AstronomicalDevice {
-    fn init_props(&mut self);
+    fn fetch_props(&mut self);
     fn get_properties(&self) -> &Vec<Property>;
     fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError>;
     fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError>;
@@ -154,23 +150,29 @@ pub trait AstronomicalDevice {
 }
 
 impl AstronomicalDevice for PowerBoxDevice {
-    fn init_props(&mut self) {
+    fn fetch_props(&mut self) {
+        let mut props: Vec<Property> = Vec::new();
         let fw = self.firmware_version();
         let wo_props = self.create_write_only_properties();
+        let pcs_stats = self.power_consumption_and_stats();
+        let pow_met_stats = self.power_metrics();
+        let pow_sens_reads = self.power_and_sensor_readings();
 
-        for prop in self.power_consumption_and_stats() {
-            self.properties.push(prop);
+        props.extend(wo_props);
+        props.extend(pcs_stats);
+        props.extend(pow_met_stats);
+        props.extend(pow_sens_reads);
+        props.push(fw);
+
+        if self.properties.is_empty() {
+            self.properties.extend(props);
+        } else {
+            for (idx, prop) in props.iter().enumerate() {
+                if self.properties[idx].value != prop.value {
+                    self.properties[idx].value = prop.value.to_owned();
+                }
+            }
         }
-        for prop in self.power_metrics() {
-            self.properties.push(prop);
-        }
-        for prop in self.power_and_sensor_readings() {
-            self.properties.push(prop);
-        }
-        for prop in wo_props {
-            self.properties.push(prop);
-        }
-        self.properties.push(fw);
     }
 
     fn get_properties(&self) -> &Vec<Property> {
@@ -197,8 +199,9 @@ impl AstronomicalDevice for PowerBoxDevice {
     fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError> {
         if let Some(prop_idx) = self.find_property_index(prop_name) {
             let r_prop = self.properties.get(prop_idx).unwrap();
-            match r_prop.permission {
-                Permission::ReadOnly => Err(DeviceError::CannotUpdateReadOnlyProperty),
+
+            match r_prop.permission.value() {
+                0 => Err(DeviceError::CannotUpdateReadOnlyProperty),
                 _ => match self.update_property_remote(prop_name, val) {
                     Ok(_) => {
                         let prop = self.properties.get_mut(prop_idx).unwrap();
@@ -312,21 +315,18 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn firmware_version(&mut self) -> Property {
+        let mut fw_version = String::from("UNKNOWN");
+
         if let Ok(fw) = self.send_command(Command::FirmwareVersion, None) {
-            Property {
-                name: "firmware_version".to_owned(),
-                value: fw,
-                kind: "string".to_owned(),
-                permission: Permission::ReadOnly,
-            }
-        } else {
-            Property {
-                name: "firmware_version".to_owned(),
-                value: "UNKNOWN".to_owned(),
-                kind: "string".to_owned(),
-                permission: Permission::ReadOnly,
-            }
+            fw_version = fw.to_owned();
         }
+        let mut p = Property::new();
+        p.name = "firmware_version".to_owned();
+        p.value = fw_version;
+        p.kind = "string".to_owned();
+        p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+
+        p
     }
 
     fn power_consumption_and_stats(&mut self) -> Vec<Property> {
@@ -337,12 +337,12 @@ impl Pegasus for PowerBoxDevice {
             let mut props = Vec::new();
 
             for (index, chunk) in slice.iter().enumerate() {
-                props.push(Property {
-                    name: POWER_STATS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_STATS[index].1.to_string(),
-                    permission: Permission::ReadOnly,
-                })
+                let mut p = Property::new();
+                p.name = POWER_STATS[index].0.to_string();
+                p.value = chunk.to_string();
+                p.kind = POWER_STATS[index].1.to_string();
+                p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+                props.push(p);
             }
             props
         } else {
@@ -358,12 +358,12 @@ impl Pegasus for PowerBoxDevice {
             let mut props = Vec::new();
 
             for (index, chunk) in slice.iter().enumerate() {
-                props.push(Property {
-                    name: POWER_METRICS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_METRICS[index].1.to_string(),
-                    permission: Permission::ReadOnly,
-                })
+                let mut p = Property::new();
+                p.name = POWER_METRICS[index].0.to_string();
+                p.value = chunk.to_string();
+                p.kind = POWER_METRICS[index].1.to_string();
+                p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+                props.push(p);
             }
             props
         } else {
@@ -378,12 +378,12 @@ impl Pegasus for PowerBoxDevice {
             let slice = &chunks.as_slice()[1..];
             let mut props = Vec::new();
             for (index, chunk) in slice.iter().enumerate() {
-                props.push(Property {
-                    name: POWER_SENSOR_READINGS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_SENSOR_READINGS[index].1.to_string(),
-                    permission: POWER_SENSOR_READINGS[index].2,
-                })
+                let mut p = Property::new();
+                p.name = POWER_SENSOR_READINGS[index].0.to_string();
+                p.value = chunk.to_string();
+                p.kind = POWER_SENSOR_READINGS[index].1.to_string();
+                p.permission = EnumOrUnknown::new(POWER_SENSOR_READINGS[index].2);
+                props.push(p);
             }
             props
         } else {
@@ -395,12 +395,12 @@ impl Pegasus for PowerBoxDevice {
         let mut props = Vec::with_capacity(WRITE_ONLY_PROPERTIES.len());
 
         for (name, kind, value, perm) in WRITE_ONLY_PROPERTIES {
-            props.push(Property {
-                name: name.to_string(),
-                value: value.to_string(),
-                kind: kind.to_string(),
-                permission: perm,
-            });
+            let mut p = Property::new();
+            p.name = name.to_string();
+            p.value = value.to_string();
+            p.kind = kind.to_string();
+            p.permission = EnumOrUnknown::new(perm);
+            props.push(p);
         }
         props
     }
