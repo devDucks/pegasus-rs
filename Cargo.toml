@@ -11,7 +11,7 @@ serialport = "4.1"
 prost = "0.10"
 log = "0.4"
 env_logger = "0.9"
-lightspeed = { git = "https://github.com/devducks/lightspeed", rev = "v0.4.1" }
+lightspeed = { git = "https://github.com/devducks/lightspeed", rev = "v0.5.0" }
 protobuf = "3.0"
 tonic = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread"] }

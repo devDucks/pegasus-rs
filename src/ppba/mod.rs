@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
+use lightspeed::devices::actions::DeviceActions;
 use lightspeed::props::Permission;
 use lightspeed::props::Property;
 use log::{debug, error, info};
@@ -125,7 +126,7 @@ const WRITE_ONLY_PROPERTIES: [(&str, &str, &str, Permission); 2] = [
 ];
 
 trait Pegasus {
-    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceError>;
+    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceActions>;
     fn firmware_version(&mut self) -> Property;
     fn power_consumption_and_stats(&mut self) -> Vec<Property>;
     fn power_metrics(&mut self) -> Vec<Property>;
@@ -136,8 +137,8 @@ trait Pegasus {
 pub trait AstronomicalDevice {
     fn fetch_props(&mut self);
     fn get_properties(&self) -> &Vec<Property>;
-    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError>;
-    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError>;
+    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions>;
+    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions>;
     fn find_property_index(&self, prop_name: &str) -> Option<usize>;
 }
 
@@ -188,12 +189,12 @@ impl AstronomicalDevice for PowerBoxDevice {
     }
 
     /// Updates the local value of a given property in the state machine
-    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError> {
+    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
         if let Some(prop_idx) = self.find_property_index(prop_name) {
             let r_prop = self.properties.get(prop_idx).unwrap();
 
             match r_prop.permission {
-                0 => Err(DeviceError::CannotUpdateReadOnlyProperty),
+                0 => Err(DeviceActions::CannotUpdateReadOnlyProperty),
                 _ => match self.update_property_remote(prop_name, val) {
                     Ok(_) => {
                         let prop = self.properties.get_mut(prop_idx).unwrap();
@@ -209,12 +210,12 @@ impl AstronomicalDevice for PowerBoxDevice {
                 },
             }
         } else {
-            Err(DeviceError::UnknownProperty)
+            Err(DeviceActions::UnknownProperty)
         }
     }
 
     /// Updates the value of the device on the device itself
-    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceError> {
+    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
         match prop_name {
             "adjustable_output" => {
                 self.send_command(Command::Adj12VOutput, Some(val))?;
@@ -240,13 +241,13 @@ impl AstronomicalDevice for PowerBoxDevice {
                 self.send_command(Command::Reboot, None)?;
                 Ok(())
             }
-            _ => Err(DeviceError::UnknownProperty),
+            _ => Err(DeviceActions::UnknownProperty),
         }
     }
 }
 
 impl Pegasus for PowerBoxDevice {
-    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceError> {
+    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceActions> {
         // First convert the command into an hex STRING
         let mut hex_command = format!("{:X}", comm as i32);
 
@@ -282,7 +283,7 @@ impl Pegasus for PowerBoxDevice {
                             }
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                            return Err(DeviceError::Timeout)
+                            return Err(DeviceActions::Timeout)
                         }
                         Err(e) => eprintln!("{:?}", e),
                     }
@@ -293,15 +294,15 @@ impl Pegasus for PowerBoxDevice {
                 let resp: Vec<&str> = response.split(":").collect();
 
                 if resp.len() > 1 && resp[1] == "ERR" {
-                    Err(DeviceError::InvalidValue)
+                    Err(DeviceActions::InvalidValue)
                 } else {
                     Ok(response.to_owned())
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceError::Timeout),
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceActions::Timeout),
             Err(e) => {
                 error!("{:?}", e);
-                Err(DeviceError::ComError)
+                Err(DeviceActions::ComError)
             }
         }
     }
