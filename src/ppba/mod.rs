@@ -10,7 +10,6 @@ use uuid::Uuid;
 use lightspeed::props::Permission;
 use lightspeed::props::Property;
 use log::{debug, error, info};
-use protobuf::EnumOrUnknown;
 
 enum Command {
     /// Adjustable 12V Output SET command is P2:
@@ -48,13 +47,6 @@ pub struct BaseDevice {
     #[cfg(windows)]
     port: COMPort,
 }
-
-// #[derive(Copy, Clone, Debug)]
-// pub enum Permission {
-//     ReadOnly = 0,
-//     WriteOnly = 1,
-//     ReadWrite = 2,
-// }
 
 pub type PowerBoxDevice = BaseDevice;
 
@@ -200,7 +192,7 @@ impl AstronomicalDevice for PowerBoxDevice {
         if let Some(prop_idx) = self.find_property_index(prop_name) {
             let r_prop = self.properties.get(prop_idx).unwrap();
 
-            match r_prop.permission.value() {
+            match r_prop.permission {
                 0 => Err(DeviceError::CannotUpdateReadOnlyProperty),
                 _ => match self.update_property_remote(prop_name, val) {
                     Ok(_) => {
@@ -320,11 +312,12 @@ impl Pegasus for PowerBoxDevice {
         if let Ok(fw) = self.send_command(Command::FirmwareVersion, None) {
             fw_version = fw.to_owned();
         }
-        let mut p = Property::new();
-        p.name = "firmware_version".to_owned();
-        p.value = fw_version;
-        p.kind = "string".to_owned();
-        p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+        let p = Property {
+            name: "firmware_version".to_owned(),
+            value: fw_version,
+            kind: "string".to_owned(),
+            permission: Permission::ReadOnly as i32,
+        };
 
         p
     }
@@ -337,11 +330,12 @@ impl Pegasus for PowerBoxDevice {
             let mut props = Vec::new();
 
             for (index, chunk) in slice.iter().enumerate() {
-                let mut p = Property::new();
-                p.name = POWER_STATS[index].0.to_string();
-                p.value = chunk.to_string();
-                p.kind = POWER_STATS[index].1.to_string();
-                p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+                let p = Property {
+                    name: POWER_STATS[index].0.to_string(),
+                    value: chunk.to_string(),
+                    kind: POWER_STATS[index].1.to_string(),
+                    permission: Permission::ReadOnly as i32,
+                };
                 props.push(p);
             }
             props
@@ -358,11 +352,12 @@ impl Pegasus for PowerBoxDevice {
             let mut props = Vec::new();
 
             for (index, chunk) in slice.iter().enumerate() {
-                let mut p = Property::new();
-                p.name = POWER_METRICS[index].0.to_string();
-                p.value = chunk.to_string();
-                p.kind = POWER_METRICS[index].1.to_string();
-                p.permission = EnumOrUnknown::new(Permission::ReadOnly);
+                let p = Property {
+                    name: POWER_METRICS[index].0.to_string(),
+                    value: chunk.to_string(),
+                    kind: POWER_METRICS[index].1.to_string(),
+                    permission: Permission::ReadOnly as i32,
+                };
                 props.push(p);
             }
             props
@@ -378,11 +373,12 @@ impl Pegasus for PowerBoxDevice {
             let slice = &chunks.as_slice()[1..];
             let mut props = Vec::new();
             for (index, chunk) in slice.iter().enumerate() {
-                let mut p = Property::new();
-                p.name = POWER_SENSOR_READINGS[index].0.to_string();
-                p.value = chunk.to_string();
-                p.kind = POWER_SENSOR_READINGS[index].1.to_string();
-                p.permission = EnumOrUnknown::new(POWER_SENSOR_READINGS[index].2);
+                let p = Property {
+                    name: POWER_SENSOR_READINGS[index].0.to_string(),
+                    value: chunk.to_string(),
+                    kind: POWER_SENSOR_READINGS[index].1.to_string(),
+                    permission: POWER_SENSOR_READINGS[index].2 as i32,
+                };
                 props.push(p);
             }
             props
@@ -395,11 +391,12 @@ impl Pegasus for PowerBoxDevice {
         let mut props = Vec::with_capacity(WRITE_ONLY_PROPERTIES.len());
 
         for (name, kind, value, perm) in WRITE_ONLY_PROPERTIES {
-            let mut p = Property::new();
-            p.name = name.to_string();
-            p.value = value.to_string();
-            p.kind = kind.to_string();
-            p.permission = EnumOrUnknown::new(perm);
+            let p = Property {
+                name: name.to_string(),
+                value: value.to_string(),
+                kind: kind.to_string(),
+                permission: perm as i32,
+            };
             props.push(p);
         }
         props

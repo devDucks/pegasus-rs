@@ -27,7 +27,7 @@ fn print_device_table(devices: &Vec<PowerBoxDevice>) {
             let kind_padding = 13 - prop.kind.len();
             let mut perm_padding = 15;
 
-            match prop.permission.value() {
+            match prop.permission {
                 0 => (),
                 _ => {
                     perm_padding = 14;

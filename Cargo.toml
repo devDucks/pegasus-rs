@@ -11,8 +11,11 @@ serialport = "4.1"
 prost = "0.10"
 log = "0.4"
 env_logger = "0.9"
-lightspeed = { git = "https://github.com/devducks/lightspeed", rev = "v0.1.0" }
+lightspeed = { git = "https://github.com/devducks/lightspeed", rev = "v0.4.1" }
 protobuf = "3.0"
+tonic = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio-serial = "5.4"
 
 [dependencies.uuid]
 version = "1.0.0"
@@ -20,3 +23,7 @@ features = [
     "v4",
     "fast-rng",
 ]
+
+[[bin]]
+name = "pgrpc-server"
+path = "src/server.rs"
