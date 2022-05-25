@@ -51,18 +51,8 @@ pub struct BaseDevice {
 
 pub type PowerBoxDevice = BaseDevice;
 
-#[derive(Debug)]
-pub enum DeviceError {
-    CannotConnect,
-    ComError,
-    Timeout,
-    CannotUpdateReadOnlyProperty,
-    UnknownProperty,
-    InvalidValue,
-}
-
 impl BaseDevice {
-    pub fn new(name: &str, address: &str, baud: u32) -> Result<Self, DeviceError> {
+    pub fn new(name: &str, address: &str, baud: u32) -> Result<Self, DeviceActions> {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(500));
 
         if let Ok(port_) = builder.open_native() {
@@ -79,10 +69,10 @@ impl BaseDevice {
                     dev.fetch_props();
                     Ok(dev)
                 }
-                Err(_) => Err(DeviceError::CannotConnect),
+                Err(_) => Err(DeviceActions::CannotConnect),
             }
         } else {
-            Err(DeviceError::CannotConnect)
+            Err(DeviceActions::CannotConnect)
         }
     }
 }
@@ -144,6 +134,7 @@ pub trait AstronomicalDevice {
 
 impl AstronomicalDevice for PowerBoxDevice {
     fn fetch_props(&mut self) {
+        info!("Fetching properties for device {}", self.name);
         let mut props: Vec<Property> = Vec::new();
         let fw = self.firmware_version();
         let wo_props = self.create_write_only_properties();
@@ -190,6 +181,7 @@ impl AstronomicalDevice for PowerBoxDevice {
 
     /// Updates the local value of a given property in the state machine
     fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
+        info!("driver updating property {} with {}", prop_name, val);
         if let Some(prop_idx) = self.find_property_index(prop_name) {
             let r_prop = self.properties.get(prop_idx).unwrap();
 
@@ -262,7 +254,7 @@ impl Pegasus for PowerBoxDevice {
 
         match self.port.write(&command) {
             Ok(_) => {
-                info!(
+                debug!(
                     "Sent command: {}",
                     std::str::from_utf8(&command[..command.len() - 1]).unwrap()
                 );

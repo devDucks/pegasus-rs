@@ -6,20 +6,20 @@ use lightspeed::props::{SetPropertyRequest, SetPropertyResponse};
 use lightspeed::request::GetDevicesRequest;
 use lightspeed::response::GetDevicesResponse;
 use lightspeed::server::astro_service_server::{AstroService, AstroServiceServer};
-use log::{debug, error};
-use pegasus_rs::ppba::{AstronomicalDevice, PowerBoxDevice};
-use pegasus_rs::utils::look_for_devices;
+use log::{debug, error, info};
+use pegasus_astro::ppba::{AstronomicalDevice, PowerBoxDevice};
+use pegasus_astro::utils::look_for_devices;
 use std::sync::Arc;
 use std::sync::Mutex;
-
 use std::time::Duration;
+use env_logger::Env;
 
 #[derive(Default, Clone)]
-struct PegasusServer {
+struct PPBADriver {
     devices: Arc<Mutex<Vec<PowerBoxDevice>>>,
 }
 
-impl PegasusServer {
+impl PPBADriver {
     fn new() -> Self {
         let found = look_for_devices("PPBA");
         let mut devices: Vec<PowerBoxDevice> = Vec::new();
@@ -44,7 +44,7 @@ impl PegasusServer {
 }
 
 #[tonic::async_trait]
-impl AstroService for PegasusServer {
+impl AstroService for PPBADriver {
     async fn get_devices(
         &self,
         request: Request<GetDevicesRequest>,
@@ -79,7 +79,7 @@ impl AstroService for PegasusServer {
         &self,
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
-        debug!(
+        info!(
             "Got a request to set a property from {:?}",
             request.remote_addr()
         );
@@ -95,12 +95,15 @@ impl AstroService for PegasusServer {
         // TODO: return case if no devices match
         for d in self.devices.lock().unwrap().iter_mut() {
             if d.id.to_string() == message.device_id {
-                debug!(
+                info!(
                     "Updating property {} for {} to {}",
                     message.property_name, message.device_id, message.property_value,
                 );
 
                 if let Err(e) = d.update_property(&message.property_name, &message.property_value) {
+		    info!("Updating property {} for {} failed with reason: {:?}",
+                    message.property_name, message.device_id, e
+                );
                     return Ok(Response::new(SetPropertyResponse { status: e as i32 }));
                 }
             }
@@ -115,24 +118,28 @@ impl AstroService for PegasusServer {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-    let addr = "127.0.0.1:50051".parse().unwrap();
-    let pegasus_service = PegasusServer::new();
+    // Default to log level INFO if LS_LOG_LEVEL is not set as
+    // an env var
+    let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
+    env_logger::init_from_env(env);
 
-    let dvs = Arc::clone(&pegasus_service.devices);
+    let addr = "127.0.0.1:50051".parse().unwrap();
+    let driver = PPBADriver::new();
+
+    let devices = Arc::clone(&driver.devices);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let mut d = dvs.lock().unwrap();
-            for x in d.iter_mut() {
-                x.fetch_props();
+            let mut devices_list = devices.lock().unwrap();
+            for device in devices_list.iter_mut() {
+                device.fetch_props();
             }
         }
     });
 
-    println!("GreeterServer listening on {}", addr);
+    info!("PPBADriver process listening on {}", addr);
     Server::builder()
-        .add_service(AstroServiceServer::new(pegasus_service))
+        .add_service(AstroServiceServer::new(driver))
         .serve(addr)
         .await?;
     Ok(())

@@ -1,5 +1,5 @@
 [package]
-name = "pegasus-rs"
+name = "pegasus_astro"
 version = "0.1.0"
 edition = "2021"
 
@@ -25,5 +25,5 @@ features = [
 ]
 
 [[bin]]
-name = "pgrpc-server"
-path = "src/server.rs"
+name = "ls_ppba"
+path = "src/ppba/server.rs"
