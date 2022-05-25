@@ -7,7 +7,10 @@ use lightspeed::request::GetDevicesRequest;
 use lightspeed::response::GetDevicesResponse;
 use lightspeed::server::astro_service_server::{AstroService, AstroServiceServer};
 use log::{debug, error, info};
-use pegasus_astro::ppba::{AstronomicalDevice, PowerBoxDevice};
+
+pub mod ppba;
+use astrotools::devices::AstronomicalDevice;
+use ppba::PowerBoxDevice;
 use pegasus_astro::utils::look_for_devices;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -31,7 +34,7 @@ impl PPBADriver {
             if let Some(serial) = dev.1.serial_number {
                 device_name = device_name + "-" + &serial
             }
-            if let Ok(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600) {
+            if let Ok(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600, 500) {
                 devices.push(device)
             } else {
                 error!("Cannot start communication with {}", &device_name);
