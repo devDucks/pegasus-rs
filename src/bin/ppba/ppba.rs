@@ -6,6 +6,7 @@ use serialport::TTYPort;
 use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
+use std::fmt::UpperHex;
 
 pub use astrotools::devices::AstronomicalDevice;
 use lightspeed::devices::actions::DeviceActions;
@@ -14,10 +15,10 @@ use lightspeed::props::Property;
 use log::{debug, error, info};
 
 pub struct PowerBoxDevice {
-    pub id: Uuid,
-    pub name: String,
+    id: Uuid,
+    name: String,
     pub properties: Vec<Property>,
-    pub address: String,
+    address: String,
     pub baud: u32,
     #[cfg(unix)]
     pub port: TTYPort,
@@ -49,7 +50,11 @@ enum Command {
     /// Reboot command is PF
     Reboot = 0x5046,
 }
-
+impl UpperHex for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	std::fmt::UpperHex::fmt(&self, f)
+    }
+}
 const POWER_STATS: [(&str, &str, Permission); 4] = [
     ("average_amps", "float", Permission::ReadOnly),
     ("amps_hours", "float", Permission::ReadOnly),
@@ -97,8 +102,8 @@ trait Pegasus {
     fn create_write_only_properties(&mut self) -> Vec<Property>;
 }
 
-impl AstronomicalDevice for PowerBoxDevice {
-    fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Result<Self, DeviceActions> {
+impl AstronomicalDevice for PowerBoxDevice  {
+    fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Option<Self> {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
 
         if let Ok(port_) = builder.open_native() {
@@ -113,18 +118,34 @@ impl AstronomicalDevice for PowerBoxDevice {
             match dev.send_command(Command::Status, None) {
                 Ok(_) => {
                     dev.fetch_props();
-                    Ok(dev)
+                    Some(dev)
                 }
-                Err(_) => Err(DeviceActions::CannotConnect),
+                Err(_) => {
+		    debug!("{}", DeviceActions::CannotConnect as i32);
+		    None
+		}
             }
         } else {
-            Err(DeviceActions::CannotConnect)
+            debug!("{}", DeviceActions::CannotConnect as i32);
+	    None
         }
     }
 
-    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceActions> {
+    fn get_id(&self) -> Uuid {
+	self.id
+    }
+
+    fn get_name(&self) -> &String {
+	&self.name
+    }
+
+    fn get_address(&self) -> &String {
+	&self.address
+    }
+
+    fn send_command<T: std::fmt::UpperHex>(&mut self, comm: T, val: Option<String>) -> Result<String, DeviceActions> {
         // First convert the command into an hex STRING
-        let mut hex_command = format!("{:X}", comm as i32);
+        let mut hex_command = format!("{:X}", comm);
 
         if let Some(value) = val {
             hex_command += hex::encode(value).as_str();
@@ -259,27 +280,27 @@ impl AstronomicalDevice for PowerBoxDevice {
     fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
         match prop_name {
             "adjustable_output" => {
-                self.send_command(Command::Adj12VOutput, Some(val.to_string()))?;
+                self.send_command(Command::Adj12VOutput as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "quadport_status" => {
-                self.send_command(Command::QuadPortStatus, Some(val.to_string()))?;
+                self.send_command(Command::QuadPortStatus as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "dew1_power" => {
-                self.send_command(Command::Dew1Power, Some(val.to_string()))?;
+                self.send_command(Command::Dew1Power as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "dew2_power" => {
-                self.send_command(Command::Dew2Power, Some(val.to_string()))?;
+                self.send_command(Command::Dew2Power as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "power_status_on_boot" => {
-                self.send_command(Command::PowerStatusOnBoot, Some(val.to_string()))?;
+                self.send_command(Command::PowerStatusOnBoot as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "reboot" => {
-                self.send_command(Command::Reboot, None)?;
+                self.send_command(Command::Reboot as i32, None)?;
                 Ok(())
             }
             _ => Err(DeviceActions::UnknownProperty),

@@ -34,7 +34,7 @@ impl PPBADriver {
             if let Some(serial) = dev.1.serial_number {
                 device_name = device_name + "-" + &serial
             }
-            if let Ok(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600, 500) {
+            if let Some(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600, 500) {
                 devices.push(device)
             } else {
                 error!("Cannot start communication with {}", &device_name);
@@ -64,9 +64,9 @@ impl AstroService for PPBADriver {
             let mut devices = Vec::new();
             for device in self.devices.lock().unwrap().iter() {
                 let d = ProtoDevice {
-                    id: device.id.to_string(),
-                    name: device.name.to_owned(),
-                    address: device.address.to_owned(),
+                    id: device.get_id().to_string(),
+                    name: device.get_name().to_owned(),
+                    address: device.get_address().to_owned(),
                     baud: device.baud as i32,
                     family: 0,
                     properties: device.properties.to_owned(),
@@ -97,7 +97,7 @@ impl AstroService for PPBADriver {
 
         // TODO: return case if no devices match
         for d in self.devices.lock().unwrap().iter_mut() {
-            if d.id.to_string() == message.device_id {
+            if d.get_id().to_string() == message.device_id {
                 info!(
                     "Updating property {} for {} to {}",
                     message.property_name, message.device_id, message.property_value,
