@@ -3,10 +3,10 @@ use hex::FromHex;
 use serialport::COMPort;
 #[cfg(unix)]
 use serialport::TTYPort;
+use std::fmt::UpperHex;
 use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
-use std::fmt::UpperHex;
 
 pub use astrotools::devices::AstronomicalDevice;
 use lightspeed::devices::actions::DeviceActions;
@@ -50,11 +50,7 @@ enum Command {
     /// Reboot command is PF
     Reboot = 0x5046,
 }
-impl UpperHex for Command {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-	std::fmt::UpperHex::fmt(&self, f)
-    }
-}
+
 const POWER_STATS: [(&str, &str, Permission); 4] = [
     ("average_amps", "float", Permission::ReadOnly),
     ("amps_hours", "float", Permission::ReadOnly),
@@ -102,7 +98,7 @@ trait Pegasus {
     fn create_write_only_properties(&mut self) -> Vec<Property>;
 }
 
-impl AstronomicalDevice for PowerBoxDevice  {
+impl AstronomicalDevice for PowerBoxDevice {
     fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Option<Self> {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
 
@@ -115,35 +111,38 @@ impl AstronomicalDevice for PowerBoxDevice  {
                 baud: baud,
                 port: port_,
             };
-            match dev.send_command(Command::Status, None) {
+            match dev.send_command(Command::Status as i32, None) {
                 Ok(_) => {
                     dev.fetch_props();
                     Some(dev)
                 }
                 Err(_) => {
-		    debug!("{}", DeviceActions::CannotConnect as i32);
-		    None
-		}
+                    debug!("{}", DeviceActions::CannotConnect as i32);
+                    None
+                }
             }
         } else {
             debug!("{}", DeviceActions::CannotConnect as i32);
-	    None
+            None
         }
     }
 
     fn get_id(&self) -> Uuid {
-	self.id
+        self.id
     }
 
     fn get_name(&self) -> &String {
-	&self.name
+        &self.name
     }
 
     fn get_address(&self) -> &String {
-	&self.address
+        &self.address
     }
 
-    fn send_command<T: std::fmt::UpperHex>(&mut self, comm: T, val: Option<String>) -> Result<String, DeviceActions> {
+    fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, DeviceActions>
+    where
+        T: UpperHex,
+    {
         // First convert the command into an hex STRING
         let mut hex_command = format!("{:X}", comm);
 
@@ -166,7 +165,7 @@ impl AstronomicalDevice for PowerBoxDevice  {
                 debug!("Receiving data");
 
                 loop {
-                    let mut read_buf = [0xAA; 1];
+                    let mut read_buf = [0xA; 1];
 
                     match self.port.read(read_buf.as_mut_slice()) {
                         Ok(_) => {
@@ -312,7 +311,7 @@ impl Pegasus for PowerBoxDevice {
     fn firmware_version(&mut self) -> Property {
         let mut fw_version = String::from("UNKNOWN");
 
-        if let Ok(fw) = self.send_command(Command::FirmwareVersion, None) {
+        if let Ok(fw) = self.send_command(Command::FirmwareVersion as i32, None) {
             fw_version = fw.to_owned();
         }
         let p = Property {
@@ -326,7 +325,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_consumption_and_stats(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerConsumAndStats, None) {
+        if let Ok(stats) = self.send_command(Command::PowerConsumAndStats as i32, None) {
             debug!("POWER CONSUMPTIONS STATS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];
@@ -348,7 +347,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_metrics(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerMetrics, None) {
+        if let Ok(stats) = self.send_command(Command::PowerMetrics as i32, None) {
             debug!("POWER METRICS STATS:{}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..chunks.len() - 1];
@@ -370,7 +369,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_and_sensor_readings(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings, None) {
+        if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings as i32, None) {
             debug!("POWER AND SENSORS READINGS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];

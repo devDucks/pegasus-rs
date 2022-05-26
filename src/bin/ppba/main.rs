@@ -10,12 +10,12 @@ use log::{debug, error, info};
 
 pub mod ppba;
 use astrotools::devices::AstronomicalDevice;
-use ppba::PowerBoxDevice;
+use env_logger::Env;
 use pegasus_astro::utils::look_for_devices;
+use ppba::PowerBoxDevice;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use env_logger::Env;
 
 #[derive(Default, Clone)]
 struct PPBADriver {
@@ -104,9 +104,10 @@ impl AstroService for PPBADriver {
                 );
 
                 if let Err(e) = d.update_property(&message.property_name, &message.property_value) {
-		    info!("Updating property {} for {} failed with reason: {:?}",
-                    message.property_name, message.device_id, e
-                );
+                    info!(
+                        "Updating property {} for {} failed with reason: {:?}",
+                        message.property_name, message.device_id, e
+                    );
                     return Ok(Response::new(SetPropertyResponse { status: e as i32 }));
                 }
             }
