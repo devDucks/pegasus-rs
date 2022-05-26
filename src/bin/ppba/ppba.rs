@@ -3,14 +3,28 @@ use hex::FromHex;
 use serialport::COMPort;
 #[cfg(unix)]
 use serialport::TTYPort;
+use std::fmt::UpperHex;
 use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
+pub use astrotools::devices::AstronomicalDevice;
 use lightspeed::devices::actions::DeviceActions;
 use lightspeed::props::Permission;
 use lightspeed::props::Property;
 use log::{debug, error, info};
+
+pub struct PowerBoxDevice {
+    id: Uuid,
+    name: String,
+    pub properties: Vec<Property>,
+    address: String,
+    pub baud: u32,
+    #[cfg(unix)]
+    pub port: TTYPort,
+    #[cfg(windows)]
+    pub port: COMPort,
+}
 
 enum Command {
     /// Adjustable 12V Output SET command is P2:
@@ -37,45 +51,6 @@ enum Command {
     Reboot = 0x5046,
 }
 
-pub struct BaseDevice {
-    pub id: Uuid,
-    pub name: String,
-    pub properties: Vec<Property>,
-    pub address: String,
-    pub baud: u32,
-    #[cfg(unix)]
-    port: TTYPort,
-    #[cfg(windows)]
-    port: COMPort,
-}
-
-pub type PowerBoxDevice = BaseDevice;
-
-impl BaseDevice {
-    pub fn new(name: &str, address: &str, baud: u32) -> Result<Self, DeviceActions> {
-        let builder = serialport::new(address, baud).timeout(Duration::from_millis(500));
-
-        if let Ok(port_) = builder.open_native() {
-            let mut dev = Self {
-                id: Uuid::new_v4(),
-                name: name.to_owned(),
-                properties: Vec::new(),
-                address: address.to_owned(),
-                baud: baud,
-                port: port_,
-            };
-            match dev.send_command(Command::Status, None) {
-                Ok(_) => {
-                    dev.fetch_props();
-                    Ok(dev)
-                }
-                Err(_) => Err(DeviceActions::CannotConnect),
-            }
-        } else {
-            Err(DeviceActions::CannotConnect)
-        }
-    }
-}
 const POWER_STATS: [(&str, &str, Permission); 4] = [
     ("average_amps", "float", Permission::ReadOnly),
     ("amps_hours", "float", Permission::ReadOnly),
@@ -116,7 +91,6 @@ const WRITE_ONLY_PROPERTIES: [(&str, &str, &str, Permission); 2] = [
 ];
 
 trait Pegasus {
-    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceActions>;
     fn firmware_version(&mut self) -> Property;
     fn power_consumption_and_stats(&mut self) -> Vec<Property>;
     fn power_metrics(&mut self) -> Vec<Property>;
@@ -124,15 +98,110 @@ trait Pegasus {
     fn create_write_only_properties(&mut self) -> Vec<Property>;
 }
 
-pub trait AstronomicalDevice {
-    fn fetch_props(&mut self);
-    fn get_properties(&self) -> &Vec<Property>;
-    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions>;
-    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions>;
-    fn find_property_index(&self, prop_name: &str) -> Option<usize>;
-}
-
 impl AstronomicalDevice for PowerBoxDevice {
+    fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Option<Self> {
+        let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
+
+        if let Ok(port_) = builder.open_native() {
+            let mut dev = Self {
+                id: Uuid::new_v4(),
+                name: name.to_owned(),
+                properties: Vec::new(),
+                address: address.to_owned(),
+                baud: baud,
+                port: port_,
+            };
+            match dev.send_command(Command::Status as i32, None) {
+                Ok(_) => {
+                    dev.fetch_props();
+                    Some(dev)
+                }
+                Err(_) => {
+                    debug!("{}", DeviceActions::CannotConnect as i32);
+                    None
+                }
+            }
+        } else {
+            debug!("{}", DeviceActions::CannotConnect as i32);
+            None
+        }
+    }
+
+    fn get_id(&self) -> Uuid {
+        self.id
+    }
+
+    fn get_name(&self) -> &String {
+        &self.name
+    }
+
+    fn get_address(&self) -> &String {
+        &self.address
+    }
+
+    fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, DeviceActions>
+    where
+        T: UpperHex,
+    {
+        // First convert the command into an hex STRING
+        let mut hex_command = format!("{:X}", comm);
+
+        if let Some(value) = val {
+            hex_command += hex::encode(value).as_str();
+        }
+
+        // Cast the hex string to a sequence of bytes
+        let mut command: Vec<u8> = Vec::from_hex(hex_command).expect("Invalid Hex String");
+        // append \n at the end
+        command.push(10);
+
+        match self.port.write(&command) {
+            Ok(_) => {
+                debug!(
+                    "Sent command: {}",
+                    std::str::from_utf8(&command[..command.len() - 1]).unwrap()
+                );
+                let mut final_buf: Vec<u8> = Vec::new();
+                debug!("Receiving data");
+
+                loop {
+                    let mut read_buf = [0xA; 1];
+
+                    match self.port.read(read_buf.as_mut_slice()) {
+                        Ok(_) => {
+                            let byte = read_buf[0];
+
+                            final_buf.push(byte);
+
+                            if byte == '\n' as u8 {
+                                break;
+                            }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                            return Err(DeviceActions::Timeout)
+                        }
+                        Err(e) => eprintln!("{:?}", e),
+                    }
+                }
+                // Strip the carriage return from the response
+                let response = std::str::from_utf8(&final_buf[..&final_buf.len() - 2]).unwrap();
+                debug!("RESPONSE: {}", response);
+                let resp: Vec<&str> = response.split(":").collect();
+
+                if resp.len() > 1 && resp[1] == "ERR" {
+                    Err(DeviceActions::InvalidValue)
+                } else {
+                    Ok(response.to_owned())
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceActions::Timeout),
+            Err(e) => {
+                error!("{:?}", e);
+                Err(DeviceActions::ComError)
+            }
+        }
+    }
+
     fn fetch_props(&mut self) {
         info!("Fetching properties for device {}", self.name);
         let mut props: Vec<Property> = Vec::new();
@@ -210,27 +279,27 @@ impl AstronomicalDevice for PowerBoxDevice {
     fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
         match prop_name {
             "adjustable_output" => {
-                self.send_command(Command::Adj12VOutput, Some(val))?;
+                self.send_command(Command::Adj12VOutput as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "quadport_status" => {
-                self.send_command(Command::QuadPortStatus, Some(val))?;
+                self.send_command(Command::QuadPortStatus as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "dew1_power" => {
-                self.send_command(Command::Dew1Power, Some(val))?;
+                self.send_command(Command::Dew1Power as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "dew2_power" => {
-                self.send_command(Command::Dew2Power, Some(val))?;
+                self.send_command(Command::Dew2Power as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "power_status_on_boot" => {
-                self.send_command(Command::PowerStatusOnBoot, Some(val))?;
+                self.send_command(Command::PowerStatusOnBoot as i32, Some(val.to_string()))?;
                 Ok(())
             }
             "reboot" => {
-                self.send_command(Command::Reboot, None)?;
+                self.send_command(Command::Reboot as i32, None)?;
                 Ok(())
             }
             _ => Err(DeviceActions::UnknownProperty),
@@ -239,70 +308,10 @@ impl AstronomicalDevice for PowerBoxDevice {
 }
 
 impl Pegasus for PowerBoxDevice {
-    fn send_command(&mut self, comm: Command, val: Option<&str>) -> Result<String, DeviceActions> {
-        // First convert the command into an hex STRING
-        let mut hex_command = format!("{:X}", comm as i32);
-
-        if let Some(value) = val {
-            hex_command += hex::encode(value).as_str();
-        }
-
-        // Cast the hex string to a sequence of bytes
-        let mut command: Vec<u8> = Vec::from_hex(hex_command).expect("Invalid Hex String");
-        // append \n at the end
-        command.push(10);
-
-        match self.port.write(&command) {
-            Ok(_) => {
-                debug!(
-                    "Sent command: {}",
-                    std::str::from_utf8(&command[..command.len() - 1]).unwrap()
-                );
-                let mut final_buf: Vec<u8> = Vec::new();
-                debug!("Receiving data");
-
-                loop {
-                    let mut read_buf = [0xAA; 1];
-
-                    match self.port.read(read_buf.as_mut_slice()) {
-                        Ok(_) => {
-                            let byte = read_buf[0];
-
-                            final_buf.push(byte);
-
-                            if byte == '\n' as u8 {
-                                break;
-                            }
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                            return Err(DeviceActions::Timeout)
-                        }
-                        Err(e) => eprintln!("{:?}", e),
-                    }
-                }
-                // Strip the carriage return from the response
-                let response = std::str::from_utf8(&final_buf[..&final_buf.len() - 2]).unwrap();
-                debug!("RESPONSE: {}", response);
-                let resp: Vec<&str> = response.split(":").collect();
-
-                if resp.len() > 1 && resp[1] == "ERR" {
-                    Err(DeviceActions::InvalidValue)
-                } else {
-                    Ok(response.to_owned())
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceActions::Timeout),
-            Err(e) => {
-                error!("{:?}", e);
-                Err(DeviceActions::ComError)
-            }
-        }
-    }
-
     fn firmware_version(&mut self) -> Property {
         let mut fw_version = String::from("UNKNOWN");
 
-        if let Ok(fw) = self.send_command(Command::FirmwareVersion, None) {
+        if let Ok(fw) = self.send_command(Command::FirmwareVersion as i32, None) {
             fw_version = fw.to_owned();
         }
         let p = Property {
@@ -316,7 +325,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_consumption_and_stats(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerConsumAndStats, None) {
+        if let Ok(stats) = self.send_command(Command::PowerConsumAndStats as i32, None) {
             debug!("POWER CONSUMPTIONS STATS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];
@@ -338,7 +347,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_metrics(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerMetrics, None) {
+        if let Ok(stats) = self.send_command(Command::PowerMetrics as i32, None) {
             debug!("POWER METRICS STATS:{}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..chunks.len() - 1];
@@ -360,7 +369,7 @@ impl Pegasus for PowerBoxDevice {
     }
 
     fn power_and_sensor_readings(&mut self) -> Vec<Property> {
-        if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings, None) {
+        if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings as i32, None) {
             debug!("POWER AND SENSORS READINGS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice()[1..];
