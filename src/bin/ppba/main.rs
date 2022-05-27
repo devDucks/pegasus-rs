@@ -1,15 +1,15 @@
 use tonic::{transport::Server, Request, Response, Status};
 
-use lightspeed::devices::actions::DeviceActions;
-use lightspeed::devices::ProtoDevice;
-use lightspeed::props::{SetPropertyRequest, SetPropertyResponse};
-use lightspeed::request::GetDevicesRequest;
-use lightspeed::response::GetDevicesResponse;
-use lightspeed::server::astro_service_server::{AstroService, AstroServiceServer};
+use lightspeed_astro::devices::actions::DeviceActions;
+use lightspeed_astro::devices::ProtoDevice;
+use lightspeed_astro::props::{SetPropertyRequest, SetPropertyResponse};
+use lightspeed_astro::request::GetDevicesRequest;
+use lightspeed_astro::response::GetDevicesResponse;
+use lightspeed_astro::server::astro_service_server::{AstroService, AstroServiceServer};
 use log::{debug, error, info};
 
 pub mod ppba;
-use astrotools::devices::AstronomicalDevice;
+use astrotools::AstronomicalDevice;
 use env_logger::Env;
 use pegasus_astro::utils::look_for_devices;
 use ppba::PowerBoxDevice;

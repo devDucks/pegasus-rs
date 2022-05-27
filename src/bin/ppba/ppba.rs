@@ -8,10 +8,9 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub use astrotools::devices::AstronomicalDevice;
-use lightspeed::devices::actions::DeviceActions;
-use lightspeed::props::Permission;
-use lightspeed::props::Property;
+use astrotools::AstronomicalDevice;
+use lightspeed_astro::devices::actions::DeviceActions;
+use lightspeed_astro::props::{Permission, Property};
 use log::{debug, error, info};
 
 pub struct PowerBoxDevice {
