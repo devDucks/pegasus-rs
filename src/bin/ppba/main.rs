@@ -127,6 +127,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
+    // Reflection service
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(lightspeed_astro::proto::FD_DESCRIPTOR_SET)
+        .build()
+        .unwrap();
+
     let addr = "127.0.0.1:50051".parse().unwrap();
     let driver = PPBADriver::new();
 
@@ -143,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("PPBADriver process listening on {}", addr);
     Server::builder()
+        .add_service(reflection_service)
         .add_service(AstroServiceServer::new(driver))
         .serve(addr)
         .await?;
