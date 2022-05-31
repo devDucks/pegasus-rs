@@ -1,4 +1,8 @@
+use astrotools::AstroSerialDevice;
 use hex::FromHex;
+use lightspeed_astro::devices::actions::DeviceActions;
+use lightspeed_astro::props::{Permission, Property};
+use log::{debug, error, info};
 #[cfg(windows)]
 use serialport::COMPort;
 #[cfg(unix)]
@@ -7,11 +11,6 @@ use std::fmt::UpperHex;
 use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
-
-use astrotools::AstronomicalDevice;
-use lightspeed_astro::devices::actions::DeviceActions;
-use lightspeed_astro::props::{Permission, Property};
-use log::{debug, error, info};
 
 pub struct PowerBoxDevice {
     id: Uuid,
@@ -97,7 +96,7 @@ trait Pegasus {
     fn create_write_only_properties(&mut self) -> Vec<Property>;
 }
 
-impl AstronomicalDevice for PowerBoxDevice {
+impl AstroSerialDevice for PowerBoxDevice {
     fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Option<Self> {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
 

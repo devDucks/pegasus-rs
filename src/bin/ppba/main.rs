@@ -9,7 +9,7 @@ use lightspeed_astro::server::astro_service_server::{AstroService, AstroServiceS
 use log::{debug, error, info};
 
 pub mod ppba;
-use astrotools::AstronomicalDevice;
+use astrotools::AstroSerialDevice;
 use env_logger::Env;
 use pegasus_astro::utils::look_for_devices;
 use ppba::PowerBoxDevice;

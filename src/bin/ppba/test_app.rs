@@ -1,5 +1,6 @@
 use log::{debug, error};
-use pegasus_rs::ppba::{AstronomicalDevice, PowerBoxDevice};
+use astrotools::AstroSerialDevice;
+use pegasus_astro::bin::ppba::PowerBoxDevice;
 use pegasus_astro::utils;
 
 fn main() {
