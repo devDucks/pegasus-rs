@@ -1,31 +1,31 @@
-use tonic::{transport::Server, Request, Response, Status};
-
-use lightspeed_astro::devices::actions::DeviceActions;
-use lightspeed_astro::devices::ProtoDevice;
-use lightspeed_astro::props::{SetPropertyRequest, SetPropertyResponse};
-use lightspeed_astro::request::GetDevicesRequest;
-use lightspeed_astro::response::GetDevicesResponse;
-use lightspeed_astro::server::astro_service_server::{AstroService, AstroServiceServer};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 pub mod ppba;
-use astrotools::AstroSerialDevice;
 use env_logger::Env;
 use pegasus_astro::utils::look_for_devices;
-use ppba::PowerBoxDevice;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::time::Duration;
+use ppba::PegasusPowerBox;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
+
+use rumqttc::Event::{Incoming, Outgoing};
+use rumqttc::Packet::Publish;
+use rumqttc::{AsyncClient, MqttOptions, QoS};
+
+use tokio::{signal, task};
+use uuid::Uuid;
+
+type PPBA = Arc<RwLock<PegasusPowerBox>>;
 
 #[derive(Default, Clone)]
 struct PPBADriver {
-    devices: Arc<Mutex<Vec<PowerBoxDevice>>>,
+    devices: Vec<PPBA>,
 }
 
 impl PPBADriver {
     fn new() -> Self {
         let found = look_for_devices("PPBA");
-        let mut devices: Vec<PowerBoxDevice> = Vec::new();
+        let mut devices: Vec<PPBA> = Vec::new();
+
         for dev in found {
             let mut device_name = String::from("PegausPowerBoxAdvanced");
             debug!("name: {}", dev.0);
@@ -34,124 +34,111 @@ impl PPBADriver {
             if let Some(serial) = dev.1.serial_number {
                 device_name = device_name + "-" + &serial
             }
-            if let Some(device) = PowerBoxDevice::new(&device_name, &dev.0, 9600, 500) {
-                devices.push(device)
-            } else {
-                error!("Cannot start communication with {}", &device_name);
-            }
+            let device = Arc::new(RwLock::new(PegasusPowerBox::new(
+                &device_name,
+                &dev.0,
+                9600,
+                500,
+            )));
+            devices.push(device);
         }
-        Self {
-            devices: Arc::new(Mutex::new(devices)),
-        }
+        Self { devices }
     }
 }
 
-#[tonic::async_trait]
-impl AstroService for PPBADriver {
-    async fn get_devices(
-        &self,
-        request: Request<GetDevicesRequest>,
-    ) -> Result<Response<GetDevicesResponse>, Status> {
-        debug!(
-            "Got a request to query devices from {:?}",
-            request.remote_addr()
-        );
-
-        if self.devices.lock().unwrap().is_empty() {
-            let reply = GetDevicesResponse { devices: vec![] };
-            Ok(Response::new(reply))
-        } else {
-            let mut devices = Vec::new();
-            for device in self.devices.lock().unwrap().iter() {
-                let d = ProtoDevice {
-                    id: device.get_id().to_string(),
-                    name: device.get_name().to_owned(),
-                    address: device.get_address().to_owned(),
-                    baud: device.baud as i32,
-                    family: 0,
-                    properties: device.properties.to_owned(),
-                };
-                devices.push(d);
-            }
-            let reply = GetDevicesResponse { devices: devices };
-            Ok(Response::new(reply))
-        }
-    }
-
-    async fn set_property(
-        &self,
-        request: Request<SetPropertyRequest>,
-    ) -> Result<Response<SetPropertyResponse>, Status> {
-        info!(
-            "Got a request to set a property from {:?}",
-            request.remote_addr()
-        );
-        let message = request.get_ref();
-        debug!("device_id: {:?}", message.device_id);
-
-        if message.device_id == "" || message.property_name == "" || message.property_value == "" {
-            return Ok(Response::new(SetPropertyResponse {
-                status: DeviceActions::InvalidValue as i32,
-            }));
-        };
-
-        // TODO: return case if no devices match
-        for d in self.devices.lock().unwrap().iter_mut() {
-            if d.get_id().to_string() == message.device_id {
-                info!(
-                    "Updating property {} for {} to {}",
-                    message.property_name, message.device_id, message.property_value,
-                );
-
-                if let Err(e) = d.update_property(&message.property_name, &message.property_value) {
-                    info!(
-                        "Updating property {} for {} failed with reason: {:?}",
-                        message.property_name, message.device_id, e
-                    );
-                    return Ok(Response::new(SetPropertyResponse { status: e as i32 }));
-                }
-            }
-        }
-
-        let reply = SetPropertyResponse {
-            status: DeviceActions::Ok as i32,
-        };
-        Ok(Response::new(reply))
+async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) {
+    for id in ids {
+        client
+            .subscribe(
+                format!("{}", format_args!("devices/{}/update", &id)),
+                QoS::AtLeastOnce,
+            )
+            .await
+            .unwrap();
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Default to log level INFO if LS_LOG_LEVEL is not set as
-    // an env var
+async fn main() {
+    console_subscriber::init();
     let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
-    // Reflection service
-    let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(lightspeed_astro::proto::FD_DESCRIPTOR_SET)
-        .build()
-        .unwrap();
-
-    let addr = "127.0.0.1:50051".parse().unwrap();
     let driver = PPBADriver::new();
 
-    let devices = Arc::clone(&driver.devices);
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            let mut devices_list = devices.lock().unwrap();
-            for device in devices_list.iter_mut() {
-                device.fetch_props();
+    if driver.devices.is_empty() {
+        warn!("No PPBA found on the system, exiting");
+        std::process::exit(0)
+    }
+
+    let mut mqttoptions = MqttOptions::new("pegasus_ppba", "127.0.0.1", 1883);
+    mqttoptions.set_keep_alive(Duration::from_secs(5));
+    let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+
+    let mut devices_id = Vec::with_capacity(driver.devices.len());
+
+    for d in &driver.devices {
+        devices_id.push(d.read().unwrap().id)
+    }
+
+    subscribe(client.clone(), &devices_id).await;
+
+    for d in &driver.devices {
+        let device = Arc::clone(d);
+
+        tokio::spawn(async move {
+            signal::ctrl_c().await.unwrap();
+            debug!("ctrl-c received!");
+            std::process::exit(0);
+        });
+    }
+
+    for d in &driver.devices {
+        let device = Arc::clone(d);
+        let c = client.clone();
+        task::spawn(async move {
+            let d_id = device.read().unwrap().id;
+            loop {
+                let now = Instant::now();
+                device.write().unwrap().fetch_props();
+                let serialized = serde_json::to_string(&*device.read().unwrap()).unwrap();
+                c.publish(
+                    format!("{}", format_args!("devices/{}", &d_id)),
+                    QoS::AtLeastOnce,
+                    false,
+                    serialized,
+                )
+                .await
+                .unwrap();
+                let elapsed = now.elapsed();
+                debug!("Refreshed and publishing state took: {:.2?}", elapsed);
+                tokio::time::sleep(Duration::from_millis(5000)).await;
+            }
+        });
+    }
+
+    while let Ok(event) = eventloop.poll().await {
+        debug!("Received = {:?}", event);
+        match event {
+            Incoming(inc) => match inc {
+                Publish(data) => {
+                    // All topics are in the form of devices/{UUID}/{action} so let's
+                    // take advantage of this fact and avoid a string split
+                    match &data.topic[45..data.topic.len()] {
+                        "update" => {
+                            info!(
+                                "received message from topic: {}\nmessage: {:?}",
+                                &data.topic, &data.payload
+                            );
+                        }
+                        _ => (),
+                    }
+                }
+                _ => debug!("Incoming event: {:?}", inc),
+            },
+            Outgoing(out) => {
+                debug!("Outgoing MQTT event: {:?}", out);
             }
         }
-    });
-
-    info!("PPBADriver process listening on {}", addr);
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(AstroServiceServer::new(driver))
-        .serve(addr)
-        .await?;
-    Ok(())
+    }
 }

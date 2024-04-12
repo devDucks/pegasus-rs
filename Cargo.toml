@@ -1,6 +1,6 @@
 [package]
 name = "pegasus_astro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/devDucks/pegasus-rs/"
@@ -14,12 +14,13 @@ hex = "0.4"
 serialport = "4.1"
 log = "0.4"
 env_logger = "0.9"
-lightspeed-astro = "0.6"
-astrotools = "0.3"
-tonic = "0.7"
-tonic-reflection = "0.4"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+astrotools = "0.5"
+tokio = { version = "1", features = ["rt-multi-thread", "signal", "tracing"] }
 tokio-serial = "5.4"
+serde_json = "1.0.115"
+serde = { version = "1.0.163", features = ["derive"] }
+rumqttc = "0.21.0"
+console-subscriber = "0.1.9"
 
 [dependencies.uuid]
 version = "1"

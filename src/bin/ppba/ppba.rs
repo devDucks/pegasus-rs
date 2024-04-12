@@ -1,8 +1,7 @@
-use astrotools::AstroSerialDevice;
+use astrotools::properties::{Permission, Prop, Property};
 use hex::FromHex;
-use lightspeed_astro::devices::actions::DeviceActions;
-use lightspeed_astro::props::{Permission, Property};
 use log::{debug, error, info};
+use serde::Serialize;
 #[cfg(windows)]
 use serialport::COMPort;
 #[cfg(unix)]
@@ -12,16 +11,40 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub struct PowerBoxDevice {
-    id: Uuid,
+#[derive(Debug, Serialize)]
+pub struct PegasusPowerBox {
+    #[serde(skip)]
+    pub id: Uuid,
     name: String,
-    pub properties: Vec<Property>,
     address: String,
     pub baud: u32,
     #[cfg(unix)]
+    #[serde(skip)]
     pub port: TTYPort,
     #[cfg(windows)]
+    #[serde(skip)]
     pub port: COMPort,
+    fw_version: Property<String>,
+    reboot: Property<bool>,
+    input_voltage: Property<f32>,
+    current: Property<f32>,
+    temperature: Property<f32>,
+    humidity: Property<f32>,
+    quadport_status: Property<bool>,
+    adj_output_status: Property<bool>,
+    dew1_power: Property<u8>,
+    dew1_current: Property<f32>,
+    dew2_power: Property<u8>,
+    dew2_current: Property<f32>,
+    autodew: Property<bool>,
+    pwr_warn: Property<bool>,
+    adj_output: Property<u8>,
+    average_amps: Property<f32>,
+    amps_hours: Property<f32>,
+    watt_hours: Property<f32>,
+    uptime: Property<u32>,
+    total_current: Property<f32>,
+    current_12v_output: Property<f32>,
 }
 
 enum Command {
@@ -49,79 +72,58 @@ enum Command {
     Reboot = 0x5046,
 }
 
-const POWER_STATS: [(&str, &str, Permission); 4] = [
-    ("average_amps", "float", Permission::ReadOnly),
-    ("amps_hours", "float", Permission::ReadOnly),
-    ("watt_hours", "float", Permission::ReadOnly),
-    ("uptime", "integer", Permission::ReadOnly),
-];
-
-const POWER_METRICS: [(&str, &str, Permission); 4] = [
-    ("total_current", "float", Permission::ReadOnly),
-    ("current_12V_output", "float", Permission::ReadOnly),
-    ("current_dewA", "float", Permission::ReadOnly),
-    ("current_dewB", "float", Permission::ReadOnly),
-];
-
-const POWER_SENSOR_READINGS: [(&str, &str, Permission); 12] = [
-    ("input_voltage", "float", Permission::ReadOnly),
-    ("current", "float", Permission::ReadOnly),
-    ("temp", "float", Permission::ReadOnly),
-    ("humidity", "float", Permission::ReadOnly),
-    ("dew_point", "float", Permission::ReadOnly),
-    ("quadport_status", "boolean", Permission::ReadWrite),
-    ("adj_output_status", "boolean", Permission::ReadOnly),
-    ("dew1_power", "integer", Permission::ReadWrite),
-    ("dew2_power", "integer", Permission::ReadWrite),
-    ("autodew_bool", "boolean", Permission::ReadOnly),
-    ("pwr_warn", "boolean", Permission::ReadOnly),
-    ("adjustable_output", "integer", Permission::ReadWrite),
-];
-
-const WRITE_ONLY_PROPERTIES: [(&str, &str, &str, Permission); 2] = [
-    ("reboot", "bool", "0", Permission::WriteOnly),
-    (
-        "power_status_on_boot",
-        "string",
-        "1111",
-        Permission::WriteOnly,
-    ),
-];
-
 trait Pegasus {
-    fn firmware_version(&mut self) -> Property;
-    fn power_consumption_and_stats(&mut self) -> Vec<Property>;
-    fn power_metrics(&mut self) -> Vec<Property>;
-    fn power_and_sensor_readings(&mut self) -> Vec<Property>;
-    fn create_write_only_properties(&mut self) -> Vec<Property>;
+    fn update_firmware_version(&mut self);
+    fn update_power_consumption_and_stats(&mut self);
+    fn update_power_metrics(&mut self);
+    fn update_power_and_sensor_readings(&mut self);
 }
 
-impl AstroSerialDevice for PowerBoxDevice {
-    fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Option<Self> {
+impl PegasusPowerBox {
+    pub fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Self {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
 
         if let Ok(port_) = builder.open_native() {
             let mut dev = Self {
                 id: Uuid::new_v4(),
                 name: name.to_owned(),
-                properties: Vec::new(),
                 address: address.to_owned(),
                 baud: baud,
                 port: port_,
+                fw_version: Property::<String>::new("UNKNOWN".to_string(), Permission::ReadOnly),
+                reboot: Property::<bool>::new(false, Permission::ReadWrite),
+                input_voltage: Property::<f32>::new(0.0, Permission::ReadOnly),
+                current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                temperature: Property::<f32>::new(0.0, Permission::ReadOnly),
+                humidity: Property::<f32>::new(0.0, Permission::ReadOnly),
+                quadport_status: Property::<bool>::new(false, Permission::ReadWrite),
+                adj_output: Property::<u8>::new(0, Permission::ReadWrite),
+                adj_output_status: Property::<bool>::new(false, Permission::ReadWrite),
+                dew1_power: Property::<u8>::new(0, Permission::ReadWrite),
+                dew1_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                dew2_power: Property::<u8>::new(0, Permission::ReadWrite),
+                dew2_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                autodew: Property::<bool>::new(false, Permission::ReadWrite),
+                pwr_warn: Property::<bool>::new(false, Permission::ReadOnly),
+                average_amps: Property::<f32>::new(0.0, Permission::ReadOnly),
+                amps_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
+                watt_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
+                uptime: Property::<u32>::new(0, Permission::ReadOnly),
+                total_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                current_12v_output: Property::<f32>::new(0.0, Permission::ReadOnly),
             };
             match dev.send_command(Command::Status as i32, None) {
                 Ok(_) => {
+                    dev.update_firmware_version();
                     dev.fetch_props();
-                    Some(dev)
+                    dev
                 }
                 Err(_) => {
-                    debug!("{}", DeviceActions::CannotConnect as i32);
-                    None
+                    panic!("Cannot connect to device");
                 }
             }
         } else {
-            debug!("{}", DeviceActions::CannotConnect as i32);
-            None
+            panic!("Cannot connect to device");
         }
     }
 
@@ -137,7 +139,7 @@ impl AstroSerialDevice for PowerBoxDevice {
         &self.address
     }
 
-    fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, DeviceActions>
+    fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, String>
     where
         T: UpperHex,
     {
@@ -176,7 +178,7 @@ impl AstroSerialDevice for PowerBoxDevice {
                             }
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                            return Err(DeviceActions::Timeout)
+                            return Err("Timeout".to_string())
                         }
                         Err(e) => eprintln!("{:?}", e),
                     }
@@ -187,218 +189,80 @@ impl AstroSerialDevice for PowerBoxDevice {
                 let resp: Vec<&str> = response.split(":").collect();
 
                 if resp.len() > 1 && resp[1] == "ERR" {
-                    Err(DeviceActions::InvalidValue)
+                    Err("Invalid value".to_string())
                 } else {
                     Ok(response.to_owned())
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err(DeviceActions::Timeout),
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Err("Timeout".to_string()),
             Err(e) => {
                 error!("{:?}", e);
-                Err(DeviceActions::ComError)
+                Err("Communication error".to_string())
             }
         }
     }
 
-    fn fetch_props(&mut self) {
+    pub fn fetch_props(&mut self) {
         info!("Fetching properties for device {}", self.name);
-        let mut props: Vec<Property> = Vec::new();
-        let fw = self.firmware_version();
-        let wo_props = self.create_write_only_properties();
-        let pcs_stats = self.power_consumption_and_stats();
-        let pow_met_stats = self.power_metrics();
-        let pow_sens_reads = self.power_and_sensor_readings();
-
-        props.extend(wo_props);
-        props.extend(pcs_stats);
-        props.extend(pow_met_stats);
-        props.extend(pow_sens_reads);
-        props.push(fw);
-
-        if self.properties.is_empty() {
-            self.properties.extend(props);
-        } else {
-            for (idx, prop) in props.iter().enumerate() {
-                if self.properties[idx].value != prop.value {
-                    self.properties[idx].value = prop.value.to_owned();
-                }
-            }
-        }
-    }
-
-    fn get_properties(&self) -> &Vec<Property> {
-        &self.properties
-    }
-
-    fn find_property_index(&self, prop_name: &str) -> Option<usize> {
-        let mut index = 256;
-
-        for (idx, prop) in self.properties.iter().enumerate() {
-            if prop.name == prop_name {
-                index = idx;
-                break;
-            }
-        }
-        if index == 256 {
-            None
-        } else {
-            Some(index)
-        }
-    }
-
-    /// Updates the local value of a given property in the state machine
-    fn update_property(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
-        info!("driver updating property {} with {}", prop_name, val);
-        if let Some(prop_idx) = self.find_property_index(prop_name) {
-            let r_prop = self.properties.get(prop_idx).unwrap();
-
-            match r_prop.permission {
-                0 => Err(DeviceActions::CannotUpdateReadOnlyProperty),
-                _ => match self.update_property_remote(prop_name, val) {
-                    Ok(_) => {
-                        let prop = self.properties.get_mut(prop_idx).unwrap();
-                        // Adjustable output is a special one, it can set both status AND power,
-                        // but 0 and 1 actually change adjustable_output_status
-                        if prop.name == "adjustable_output" && (val == "0" || val == "1") {
-                            return Ok(());
-                        }
-                        prop.value = val.to_owned();
-                        return Ok(());
-                    }
-                    Err(e) => return Err(e),
-                },
-            }
-        } else {
-            Err(DeviceActions::UnknownProperty)
-        }
-    }
-
-    /// Updates the value of the device on the device itself
-    fn update_property_remote(&mut self, prop_name: &str, val: &str) -> Result<(), DeviceActions> {
-        match prop_name {
-            "adjustable_output" => {
-                self.send_command(Command::Adj12VOutput as i32, Some(val.to_string()))?;
-                Ok(())
-            }
-            "quadport_status" => {
-                self.send_command(Command::QuadPortStatus as i32, Some(val.to_string()))?;
-                Ok(())
-            }
-            "dew1_power" => {
-                self.send_command(Command::Dew1Power as i32, Some(val.to_string()))?;
-                Ok(())
-            }
-            "dew2_power" => {
-                self.send_command(Command::Dew2Power as i32, Some(val.to_string()))?;
-                Ok(())
-            }
-            "power_status_on_boot" => {
-                self.send_command(Command::PowerStatusOnBoot as i32, Some(val.to_string()))?;
-                Ok(())
-            }
-            "reboot" => {
-                self.send_command(Command::Reboot as i32, None)?;
-                Ok(())
-            }
-            _ => Err(DeviceActions::UnknownProperty),
-        }
+        self.update_power_consumption_and_stats();
+        self.update_power_metrics();
+        self.update_power_and_sensor_readings();
     }
 }
 
-impl Pegasus for PowerBoxDevice {
-    fn firmware_version(&mut self) -> Property {
-        let mut fw_version = String::from("UNKNOWN");
-
+impl Pegasus for PegasusPowerBox {
+    fn update_firmware_version(&mut self) {
         if let Ok(fw) = self.send_command(Command::FirmwareVersion as i32, None) {
-            fw_version = fw.to_owned();
-        }
-        let p = Property {
-            name: "firmware_version".to_owned(),
-            value: fw_version,
-            kind: "string".to_owned(),
-            permission: Permission::ReadOnly as i32,
+            self.fw_version.update_int(fw.to_owned());
         };
-
-        p
     }
 
-    fn power_consumption_and_stats(&mut self) -> Vec<Property> {
+    fn update_power_consumption_and_stats(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerConsumAndStats as i32, None) {
             debug!("POWER CONSUMPTIONS STATS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
-            let slice = &chunks.as_slice()[1..];
-            let mut props = Vec::new();
+            let slice = chunks.as_slice();
+            info!("Chunks PC: {:?}", &slice);
+            // The response will be something like PS:averageAmps:ampHours:wattHours:uptime_in_milliseconds
 
-            for (index, chunk) in slice.iter().enumerate() {
-                let p = Property {
-                    name: POWER_STATS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_STATS[index].1.to_string(),
-                    permission: Permission::ReadOnly as i32,
-                };
-                props.push(p);
-            }
-            props
+            self.current.update_int(slice[1].parse().unwrap());
+            self.amps_hours.update_int(slice[2].parse().unwrap());
+            self.watt_hours.update_int(slice[3].parse().unwrap());
+            self.uptime.update_int(slice[4].parse().unwrap());
         } else {
-            vec![]
-        }
+            error!("Couldn't read power consumption metrics");
+        };
     }
 
-    fn power_metrics(&mut self) -> Vec<Property> {
+    fn update_power_metrics(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerMetrics as i32, None) {
             debug!("POWER METRICS STATS:{}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
-            let slice = &chunks.as_slice()[1..chunks.len() - 1];
-            let mut props = Vec::new();
-
-            for (index, chunk) in slice.iter().enumerate() {
-                let p = Property {
-                    name: POWER_METRICS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_METRICS[index].1.to_string(),
-                    permission: Permission::ReadOnly as i32,
-                };
-                props.push(p);
-            }
-            props
+            let slice = &chunks.as_slice();
+            info!("Chunks PM: {:?}", &slice);
+            // The response is PC:total_current:current_12V_outputs:current_dewA:current_dewB:uptime_in_milliseconds
+            self.total_current.update_int(slice[1].parse().unwrap());
+            self.current_12v_output
+                .update_int(slice[2].parse().unwrap());
+            self.dew1_current.update_int(slice[3].parse().unwrap());
+            self.dew2_current.update_int(slice[4].parse().unwrap());
         } else {
-            vec![]
-        }
+            error!("Couldn't read power metrics stats");
+        };
     }
 
-    fn power_and_sensor_readings(&mut self) -> Vec<Property> {
+    fn update_power_and_sensor_readings(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings as i32, None) {
             debug!("POWER AND SENSORS READINGS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
-            let slice = &chunks.as_slice()[1..];
-            let mut props = Vec::new();
-            for (index, chunk) in slice.iter().enumerate() {
-                let p = Property {
-                    name: POWER_SENSOR_READINGS[index].0.to_string(),
-                    value: chunk.to_string(),
-                    kind: POWER_SENSOR_READINGS[index].1.to_string(),
-                    permission: POWER_SENSOR_READINGS[index].2 as i32,
-                };
-                props.push(p);
-            }
-            props
+            let slice = chunks.as_slice();
+            info!("Chunks PSR: {:?}", &slice);
+            // The response is: PPBA:voltage:current_of_12V_outputs_:temp:humidity:dewpoint:quadport_status:adj_output_status:dewA_power:dewB_power:autodew_bool:pwr_warn:pwradj
+            self.input_voltage.update_int(slice[1].parse().unwrap());
+            self.current_12v_output
+                .update_int(slice[2].parse().unwrap());
         } else {
-            vec![]
+            error!("Couldn't read power and sensors reading");
         }
-    }
-
-    fn create_write_only_properties(&mut self) -> Vec<Property> {
-        let mut props = Vec::with_capacity(WRITE_ONLY_PROPERTIES.len());
-
-        for (name, kind, value, perm) in WRITE_ONLY_PROPERTIES {
-            let p = Property {
-                name: name.to_string(),
-                value: value.to_string(),
-                kind: kind.to_string(),
-                permission: perm as i32,
-            };
-            props.push(p);
-        }
-        props
     }
 }

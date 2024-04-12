@@ -1,5 +1,5 @@
+use log::info;
 use serialport::{available_ports, SerialPortType, UsbPortInfo};
-
 pub fn look_for_devices(device_name: &str) -> Vec<(String, UsbPortInfo)> {
     let ports = available_ports().unwrap();
     let mut devices = Vec::new();
