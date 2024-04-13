@@ -14,6 +14,8 @@ use rumqttc::{AsyncClient, MqttOptions, QoS};
 use tokio::{signal, task};
 use uuid::Uuid;
 
+use rumqttc::ClientError;
+
 type PPBA = Arc<RwLock<PegasusPowerBox>>;
 
 #[derive(Default, Clone)]
@@ -46,21 +48,22 @@ impl PPBADriver {
     }
 }
 
-async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) {
+async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) -> Result<(), ClientError> {
     for id in ids {
         client
             .subscribe(
                 format!("{}", format_args!("devices/{}/update", &id)),
-                QoS::AtLeastOnce,
+                QoS::ExactlyOnce,
             )
-            .await
-            .unwrap();
+            .await?
     }
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    console_subscriber::init();
+    //    console_subscriber::init();
     let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
@@ -81,17 +84,31 @@ async fn main() {
         devices_id.push(d.read().unwrap().id)
     }
 
-    subscribe(client.clone(), &devices_id).await;
+    subscribe(client.clone(), &devices_id).await.unwrap();
 
-    for d in &driver.devices {
-        let device = Arc::clone(d);
-
-        tokio::spawn(async move {
-            signal::ctrl_c().await.unwrap();
-            debug!("ctrl-c received!");
-            std::process::exit(0);
-        });
+    match eventloop.poll().await {
+        Err(rumqttc::ConnectionError::ConnectionRefused(_))
+        | Err(rumqttc::ConnectionError::Io(_)) => {
+            error!("The MQTT broker is not avialble, aborting");
+            std::process::exit(0)
+        }
+        Err(e) => {
+            error!("An error occured: {} - aborting", e);
+            std::process::exit(0)
+        }
+        _ => (),
     }
+
+    eventloop.network_options.set_connection_timeout(5);
+
+    let c_client = client.clone();
+
+    tokio::spawn(async move {
+        signal::ctrl_c().await.unwrap();
+        debug!("ctrl-c received!");
+        c_client.disconnect().await.unwrap();
+        std::process::exit(0);
+    });
 
     for d in &driver.devices {
         let device = Arc::clone(d);
@@ -111,8 +128,8 @@ async fn main() {
                 .await
                 .unwrap();
                 let elapsed = now.elapsed();
-                debug!("Refreshed and publishing state took: {:.2?}", elapsed);
-                tokio::time::sleep(Duration::from_millis(5000)).await;
+                info!("Refreshed and publishing state took: {:.2?}", elapsed);
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         });
     }

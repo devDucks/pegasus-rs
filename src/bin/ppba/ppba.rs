@@ -222,7 +222,6 @@ impl Pegasus for PegasusPowerBox {
             debug!("POWER CONSUMPTIONS STATS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = chunks.as_slice();
-            info!("Chunks PC: {:?}", &slice);
             // The response will be something like PS:averageAmps:ampHours:wattHours:uptime_in_milliseconds
 
             self.current.update_int(slice[1].parse().unwrap());
@@ -239,7 +238,7 @@ impl Pegasus for PegasusPowerBox {
             debug!("POWER METRICS STATS:{}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = &chunks.as_slice();
-            info!("Chunks PM: {:?}", &slice);
+
             // The response is PC:total_current:current_12V_outputs:current_dewA:current_dewB:uptime_in_milliseconds
             self.total_current.update_int(slice[1].parse().unwrap());
             self.current_12v_output
@@ -256,7 +255,7 @@ impl Pegasus for PegasusPowerBox {
             debug!("POWER AND SENSORS READINGS: {}", stats);
             let chunks: Vec<&str> = stats.split(":").collect();
             let slice = chunks.as_slice();
-            info!("Chunks PSR: {:?}", &slice);
+
             // The response is: PPBA:voltage:current_of_12V_outputs_:temp:humidity:dewpoint:quadport_status:adj_output_status:dewA_power:dewB_power:autodew_bool:pwr_warn:pwradj
             self.input_voltage.update_int(slice[1].parse().unwrap());
             self.current_12v_output
