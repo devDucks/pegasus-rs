@@ -15,6 +15,7 @@ use tokio::{signal, task};
 use uuid::Uuid;
 
 use rumqttc::ClientError;
+use serde::{Deserialize, Serialize};
 
 type PPBA = Arc<RwLock<PegasusPowerBox>>;
 
@@ -59,6 +60,20 @@ async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) -> Result<(), ClientErr
     }
 
     Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+enum PropKind {
+    Bool(bool),
+    String(String),
+    Float(f32),
+    Int(u32),
+}
+
+#[derive(Serialize, Deserialize)]
+struct UpdateProperty {
+    prop_name: String,
+    val: PropKind
 }
 
 #[tokio::main]
@@ -147,6 +162,7 @@ async fn main() {
                                 "received message from topic: {}\nmessage: {:?}",
                                 &data.topic, &data.payload
                             );
+			    let body: UpdateProperty = serde_json::from_slice(&data.payload).unwrap();
                         }
                         _ => (),
                     }

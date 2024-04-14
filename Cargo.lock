@@ -76,9 +76,9 @@ dependencies = [
 
 [[package]]
 name = "astrotools"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f02d3f62e56faef5283ab8a51bc67e161d7d8dde439dbb49f976065b6f17532"
+checksum = "fbd2eb09b65780a5b893ebaf0bf0f763f2b1376e3c6ba6e8e00645ad5b72a808"
 dependencies = [
  "serde",
  "serde_json",
