@@ -11,22 +11,24 @@ use rumqttc::Event::{Incoming, Outgoing};
 use rumqttc::Packet::Publish;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 
+use serde::{Deserialize, Serialize};
 use tokio::{signal, task};
 use uuid::Uuid;
 
 use rumqttc::ClientError;
+use std::collections::HashMap;
 
 type PPBA = Arc<RwLock<PegasusPowerBox>>;
 
 #[derive(Default, Clone)]
 struct PPBADriver {
-    devices: Vec<PPBA>,
+    devices: HashMap<String, PPBA>,
 }
 
 impl PPBADriver {
     fn new() -> Self {
         let found = look_for_devices("PPBA");
-        let mut devices: Vec<PPBA> = Vec::new();
+        let mut devices: HashMap<String, PPBA> = HashMap::new();
 
         for dev in found {
             let mut device_name = String::from("PegausPowerBoxAdvanced");
@@ -36,13 +38,8 @@ impl PPBADriver {
             if let Some(serial) = dev.1.serial_number {
                 device_name = device_name + "-" + &serial
             }
-            let device = Arc::new(RwLock::new(PegasusPowerBox::new(
-                &device_name,
-                &dev.0,
-                9600,
-                500,
-            )));
-            devices.push(device);
+            let device: PegasusPowerBox = PegasusPowerBox::new(&device_name, &dev.0, 9600, 500);
+            devices.insert(device.id.to_string(), Arc::new(RwLock::new(device)));
         }
         Self { devices }
     }
@@ -59,6 +56,22 @@ async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) -> Result<(), ClientErr
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum PropValue {
+    Int(u32),
+    Bool(bool),
+    Str(String),
+    Float(f32),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// Struct to serialize an update property request coming from MQTT
+struct UpdatePropertyRequest {
+    prop_name: String,
+    value: PropValue,
 }
 
 #[tokio::main]
@@ -80,7 +93,7 @@ async fn main() {
 
     let mut devices_id = Vec::with_capacity(driver.devices.len());
 
-    for d in &driver.devices {
+    for (_, d) in driver.devices.iter() {
         devices_id.push(d.read().unwrap().id)
     }
 
@@ -110,7 +123,7 @@ async fn main() {
         std::process::exit(0);
     });
 
-    for d in &driver.devices {
+    for (_, d) in driver.devices.iter() {
         let device = Arc::clone(d);
         let c = client.clone();
         task::spawn(async move {
@@ -129,7 +142,7 @@ async fn main() {
                 .unwrap();
                 let elapsed = now.elapsed();
                 info!("Refreshed and publishing state took: {:.2?}", elapsed);
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(5000)).await;
             }
         });
     }
@@ -141,12 +154,41 @@ async fn main() {
                 Publish(data) => {
                     // All topics are in the form of devices/{UUID}/{action} so let's
                     // take advantage of this fact and avoid a string split
-                    match &data.topic[45..data.topic.len()] {
+                    let device_id = &data.topic[8..44];
+                    let topic = &data.topic[45..data.topic.len()];
+                    let device = driver.devices.get(device_id).unwrap();
+                    match topic {
                         "update" => {
-                            info!(
-                                "received message from topic: {}\nmessage: {:?}",
-                                &data.topic, &data.payload
-                            );
+                            let req: UpdatePropertyRequest =
+                                serde_json::from_slice(&data.payload).unwrap();
+
+                            match req.value {
+                                PropValue::Bool(v) => {
+                                    info!("Received bool: {:?}", req);
+                                    match &req.prop_name[..] {
+                                        "quadport_status" => {
+                                            info!("Updating quadport_status");
+                                            device.write().unwrap().set_adjustable_output(v);
+                                        }
+                                        _ => (),
+                                    }
+                                }
+                                PropValue::Int(v) => {
+                                    info!("Received Number: {:?}", req);
+                                    match &req.prop_name[..] {
+                                        "dew_a_power" => {
+                                            info!("Updating DewA PWM");
+                                            device.write().unwrap().set_dew_pwm(0, v);
+                                        }
+                                        "dew_b_power" => {
+                                            info!("Updating DewB PWM");
+                                            device.write().unwrap().set_dew_pwm(1, v);
+                                        }
+                                        _ => (),
+                                    }
+                                }
+                                _ => (),
+                            }
                         }
                         _ => (),
                     }

@@ -29,13 +29,13 @@ pub struct PegasusPowerBox {
     input_voltage: Property<f32>,
     current: Property<f32>,
     temperature: Property<f32>,
-    humidity: Property<f32>,
+    humidity: Property<u8>,
     quadport_status: Property<bool>,
     adj_output_status: Property<bool>,
-    dew1_power: Property<u8>,
-    dew1_current: Property<f32>,
-    dew2_power: Property<u8>,
-    dew2_current: Property<f32>,
+    dew_a_power: Property<u8>,
+    dew_a_current: Property<f32>,
+    dew_b_power: Property<u8>,
+    dew_b_current: Property<f32>,
     autodew: Property<bool>,
     pwr_warn: Property<bool>,
     adj_output: Property<u8>,
@@ -95,14 +95,14 @@ impl PegasusPowerBox {
                 input_voltage: Property::<f32>::new(0.0, Permission::ReadOnly),
                 current: Property::<f32>::new(0.0, Permission::ReadOnly),
                 temperature: Property::<f32>::new(0.0, Permission::ReadOnly),
-                humidity: Property::<f32>::new(0.0, Permission::ReadOnly),
+                humidity: Property::<u8>::new(0, Permission::ReadOnly),
                 quadport_status: Property::<bool>::new(false, Permission::ReadWrite),
                 adj_output: Property::<u8>::new(0, Permission::ReadWrite),
                 adj_output_status: Property::<bool>::new(false, Permission::ReadWrite),
-                dew1_power: Property::<u8>::new(0, Permission::ReadWrite),
-                dew1_current: Property::<f32>::new(0.0, Permission::ReadOnly),
-                dew2_power: Property::<u8>::new(0, Permission::ReadWrite),
-                dew2_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                dew_a_power: Property::<u8>::new(0, Permission::ReadWrite),
+                dew_a_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+                dew_b_power: Property::<u8>::new(0, Permission::ReadWrite),
+                dew_b_current: Property::<f32>::new(0.0, Permission::ReadOnly),
                 autodew: Property::<bool>::new(false, Permission::ReadWrite),
                 pwr_warn: Property::<bool>::new(false, Permission::ReadOnly),
                 average_amps: Property::<f32>::new(0.0, Permission::ReadOnly),
@@ -137,6 +137,25 @@ impl PegasusPowerBox {
 
     fn get_address(&self) -> &String {
         &self.address
+    }
+
+    pub fn set_adjustable_output(&mut self, val: bool) {
+        self.send_command(
+            Command::QuadPortStatus as i32,
+            if val {
+                Some("1".to_string())
+            } else {
+                Some("0".to_string())
+            },
+        );
+    }
+
+    pub fn set_dew_pwm(&mut self, idx: usize, val: u32) {
+        match idx {
+            0 => self.send_command(Command::Dew1Power as i32, Some(val.to_string())),
+            1 => self.send_command(Command::Dew2Power as i32, Some(val.to_string())),
+            _ => todo!(),
+        };
     }
 
     fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, String>
@@ -185,7 +204,7 @@ impl PegasusPowerBox {
                 }
                 // Strip the carriage return from the response
                 let response = std::str::from_utf8(&final_buf[..&final_buf.len() - 2]).unwrap();
-                debug!("RESPONSE: {}", response);
+                info!("RESPONSE: {}", response);
                 let resp: Vec<&str> = response.split(":").collect();
 
                 if resp.len() > 1 && resp[1] == "ERR" {
@@ -243,8 +262,8 @@ impl Pegasus for PegasusPowerBox {
             self.total_current.update_int(slice[1].parse().unwrap());
             self.current_12v_output
                 .update_int(slice[2].parse().unwrap());
-            self.dew1_current.update_int(slice[3].parse().unwrap());
-            self.dew2_current.update_int(slice[4].parse().unwrap());
+            self.dew_a_current.update_int(slice[3].parse().unwrap());
+            self.dew_b_current.update_int(slice[4].parse().unwrap());
         } else {
             error!("Couldn't read power metrics stats");
         };
@@ -260,6 +279,12 @@ impl Pegasus for PegasusPowerBox {
             self.input_voltage.update_int(slice[1].parse().unwrap());
             self.current_12v_output
                 .update_int(slice[2].parse().unwrap());
+            self.temperature.update_int(slice[3].parse().unwrap());
+            self.humidity.update_int(slice[4].parse().unwrap());
+            self.quadport_status
+                .update_int(slice[6].parse::<u8>().unwrap() != 0);
+            self.dew_a_power.update_int(slice[8].parse().unwrap());
+            self.dew_b_power.update_int(slice[8].parse().unwrap());
         } else {
             error!("Couldn't read power and sensors reading");
         }
