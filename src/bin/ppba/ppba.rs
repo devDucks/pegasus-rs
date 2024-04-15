@@ -127,20 +127,8 @@ impl PegasusPowerBox {
         }
     }
 
-    fn get_id(&self) -> Uuid {
-        self.id
-    }
-
-    fn get_name(&self) -> &String {
-        &self.name
-    }
-
-    fn get_address(&self) -> &String {
-        &self.address
-    }
-
     pub fn set_adjustable_output(&mut self, val: bool) {
-        self.send_command(
+        let _ = self.send_command(
             Command::QuadPortStatus as i32,
             if val {
                 Some("1".to_string())
@@ -151,11 +139,17 @@ impl PegasusPowerBox {
     }
 
     pub fn set_dew_pwm(&mut self, idx: usize, val: u32) {
-        match idx {
+        let _ = match idx {
             0 => self.send_command(Command::Dew1Power as i32, Some(val.to_string())),
             1 => self.send_command(Command::Dew2Power as i32, Some(val.to_string())),
             _ => todo!(),
         };
+    }
+
+    pub fn reboot(&mut self) {
+	if let Err(_) = self.send_command(Command::Reboot as i32, None) {
+	    error!("Failed to issue a reboot to the device");
+	}
     }
 
     fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, String>
@@ -232,7 +226,7 @@ impl PegasusPowerBox {
 impl Pegasus for PegasusPowerBox {
     fn update_firmware_version(&mut self) {
         if let Ok(fw) = self.send_command(Command::FirmwareVersion as i32, None) {
-            self.fw_version.update_int(fw.to_owned());
+            let _ = self.fw_version.update_int(fw.to_owned());
         };
     }
 
@@ -243,10 +237,10 @@ impl Pegasus for PegasusPowerBox {
             let slice = chunks.as_slice();
             // The response will be something like PS:averageAmps:ampHours:wattHours:uptime_in_milliseconds
 
-            self.current.update_int(slice[1].parse().unwrap());
-            self.amps_hours.update_int(slice[2].parse().unwrap());
-            self.watt_hours.update_int(slice[3].parse().unwrap());
-            self.uptime.update_int(slice[4].parse().unwrap());
+            let _ = self.current.update_int(slice[1].parse().unwrap());
+            let _ = self.amps_hours.update_int(slice[2].parse().unwrap());
+            let _ = self.watt_hours.update_int(slice[3].parse().unwrap());
+            let _ = self.uptime.update_int(slice[4].parse().unwrap());
         } else {
             error!("Couldn't read power consumption metrics");
         };
@@ -259,11 +253,11 @@ impl Pegasus for PegasusPowerBox {
             let slice = &chunks.as_slice();
 
             // The response is PC:total_current:current_12V_outputs:current_dewA:current_dewB:uptime_in_milliseconds
-            self.total_current.update_int(slice[1].parse().unwrap());
-            self.current_12v_output
+            let _ = self.total_current.update_int(slice[1].parse().unwrap());
+            let _ = self.current_12v_output
                 .update_int(slice[2].parse().unwrap());
-            self.dew_a_current.update_int(slice[3].parse().unwrap());
-            self.dew_b_current.update_int(slice[4].parse().unwrap());
+            let _ = self.dew_a_current.update_int(slice[3].parse().unwrap());
+            let _ = self.dew_b_current.update_int(slice[4].parse().unwrap());
         } else {
             error!("Couldn't read power metrics stats");
         };
@@ -276,15 +270,15 @@ impl Pegasus for PegasusPowerBox {
             let slice = chunks.as_slice();
 
             // The response is: PPBA:voltage:current_of_12V_outputs_:temp:humidity:dewpoint:quadport_status:adj_output_status:dewA_power:dewB_power:autodew_bool:pwr_warn:pwradj
-            self.input_voltage.update_int(slice[1].parse().unwrap());
-            self.current_12v_output
+            let _ = self.input_voltage.update_int(slice[1].parse().unwrap());
+            let _ = self.current_12v_output
                 .update_int(slice[2].parse().unwrap());
-            self.temperature.update_int(slice[3].parse().unwrap());
-            self.humidity.update_int(slice[4].parse().unwrap());
-            self.quadport_status
+            let _ = self.temperature.update_int(slice[3].parse().unwrap());
+            let _ = self.humidity.update_int(slice[4].parse().unwrap());
+            let _ = self.quadport_status
                 .update_int(slice[6].parse::<u8>().unwrap() != 0);
-            self.dew_a_power.update_int(slice[8].parse().unwrap());
-            self.dew_b_power.update_int(slice[8].parse().unwrap());
+            let _ = self.dew_a_power.update_int(slice[8].parse().unwrap());
+            let _ = self.dew_b_power.update_int(slice[8].parse().unwrap());
         } else {
             error!("Couldn't read power and sensors reading");
         }

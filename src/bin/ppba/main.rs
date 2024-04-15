@@ -170,6 +170,10 @@ async fn main() {
                                             info!("Updating quadport_status");
                                             device.write().unwrap().set_adjustable_output(v);
                                         }
+					"reboot" => {
+					    info!("Issuing a reboot");
+					    device.write().unwrap().reboot();
+					}
                                         _ => (),
                                     }
                                 }
