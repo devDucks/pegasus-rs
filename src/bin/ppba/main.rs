@@ -11,25 +11,115 @@ use rumqttc::Event::{Incoming, Outgoing};
 use rumqttc::Packet::Publish;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 
-use serde::{Deserialize, Serialize};
 use tokio::{signal, task};
-use uuid::Uuid;
 
+use astrotools::properties::{PropValue, UpdatePropertyRequest};
+use astrotools::LightspeedError;
 use rumqttc::ClientError;
 use std::collections::HashMap;
 
 type PPBA = Arc<RwLock<PegasusPowerBox>>;
 
-#[derive(Default, Clone)]
+#[derive(Debug, Clone)]
 struct PPBADriver {
     devices: HashMap<String, PPBA>,
+    mqtt_client: AsyncClient,
 }
 
 impl PPBADriver {
-    fn new() -> Self {
-        let found = look_for_devices("PPBA");
-        let mut devices: HashMap<String, PPBA> = HashMap::new();
+    fn new(client: AsyncClient) -> Self {
+        let mut driver = Self {
+            devices: HashMap::new(),
+            mqtt_client: client,
+        };
+        driver.find_devices();
+        if driver.devices.is_empty() {
+            warn!("No PPBA found on the system");
+        }
+        driver
+    }
 
+    fn remove_device(&mut self, dev_name: &str) {
+        let _ = self.devices.remove(dev_name);
+        warn!("Device disconnected: {}", dev_name);
+    }
+
+    fn add_device(&mut self, device_name: &String, port: &String) {
+        let device: PegasusPowerBox = PegasusPowerBox::new(&device_name, port, 9600, 500);
+        info!("New device discovered: {}", &device_name);
+        let id = device.id.to_string().clone();
+        self.devices
+            .insert(device.id.to_string(), Arc::new(RwLock::new(device)));
+        let _ = self.subscribe(&id);
+        self.start_loop(&id);
+    }
+
+    fn start_loop(&self, device_id: &String) {
+        let device = self.devices.get(device_id).unwrap().clone();
+        let id = device_id.clone();
+        let client = self.mqtt_client.clone();
+
+        task::spawn(async move {
+            loop {
+                let now = Instant::now();
+                if device.write().unwrap().fetch_props().is_ok() {
+                    let serialized = serde_json::to_string(&*device.read().unwrap()).unwrap();
+                    client
+                        .publish(
+                            format!("{}", format_args!("devices/{}", &id)),
+                            QoS::AtLeastOnce,
+                            false,
+                            serialized,
+                        )
+                        .await
+                        .unwrap();
+                    let elapsed = now.elapsed();
+                    info!("Refreshed and publishing state took: {:.2?}", elapsed);
+                    tokio::time::sleep(Duration::from_millis(5000)).await;
+                } else {
+                    client
+                        .publish(
+                            format!("{}", format_args!("devices/{}/delete", &id)),
+                            QoS::AtLeastOnce,
+                            false,
+                            vec![],
+                        )
+                        .await
+                        .unwrap();
+                    break;
+                }
+            }
+        });
+    }
+
+    fn subscribe(&self, id: &String) -> Result<(), ClientError> {
+        let client = self.mqtt_client.clone();
+        let d_id = id.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .subscribe(
+                    format!("{}", format_args!("devices/{}/update", &d_id)),
+                    QoS::ExactlyOnce,
+                )
+                .await;
+            let _ = client
+                .subscribe(
+                    format!("{}", format_args!("devices/{}/delete", &d_id)),
+                    QoS::ExactlyOnce,
+                )
+                .await;
+            let _ = client
+                .subscribe(
+                    format!("{}", format_args!("devices/{}/new", &d_id)),
+                    QoS::ExactlyOnce,
+                )
+                .await;
+        });
+        Ok(())
+    }
+
+    fn find_devices(&mut self) {
+        let found = look_for_devices("PPBA");
         for dev in found {
             let mut device_name = String::from("PegausPowerBoxAdvanced");
             debug!("name: {}", dev.0);
@@ -38,40 +128,75 @@ impl PPBADriver {
             if let Some(serial) = dev.1.serial_number {
                 device_name = device_name + "-" + &serial
             }
-            let device: PegasusPowerBox = PegasusPowerBox::new(&device_name, &dev.0, 9600, 500);
-            devices.insert(device.id.to_string(), Arc::new(RwLock::new(device)));
+
+            if !self.devices.contains_key(&device_name) {
+                self.add_device(&device_name, &dev.0);
+            }
         }
-        Self { devices }
     }
 }
 
-async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) -> Result<(), ClientError> {
-    for id in ids {
-        client
-            .subscribe(
-                format!("{}", format_args!("devices/{}/update", &id)),
-                QoS::ExactlyOnce,
-            )
-            .await?
-    }
-
+async fn notify_update_error(
+    client: AsyncClient,
+    id: &str,
+    prop: &UpdatePropertyRequest,
+    err: LightspeedError,
+) -> Result<(), ClientError> {
+    client
+        .publish(
+            format!("{}", format_args!("devices/{}/update/error", &id)),
+            QoS::ExactlyOnce,
+            false,
+            serde_json::to_vec(&serde_json::json!({
+            "prop_name": prop.prop_name,
+            "value": prop.value,
+            "error": err,
+            }))
+            .unwrap(),
+        )
+        .await?;
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-enum PropValue {
-    Int(u32),
-    Bool(bool),
-    Str(String),
-    Float(f32),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-/// Struct to serialize an update property request coming from MQTT
-struct UpdatePropertyRequest {
-    prop_name: String,
-    value: PropValue,
+fn update_property(req: &UpdatePropertyRequest, device: PPBA) -> Result<(), LightspeedError> {
+    match req.value {
+        PropValue::Bool(v) => {
+            info!("Received bool: {:?}", req);
+            match &req.prop_name[..] {
+                "quadport_status" => {
+                    info!("Updating quadport_status");
+                    let mut d = device.write().unwrap();
+                    d.set_adjustable_output(v)
+                }
+                "reboot" => {
+                    info!("Issuing a reboot");
+                    device.write().unwrap().reboot()
+                }
+                _ => {
+                    warn!("Unknown property: {}", &req.prop_name[..]);
+                    Ok(())
+                }
+            }
+        }
+        PropValue::Int(v) => {
+            info!("Received Number: {:?}", req);
+            match &req.prop_name[..] {
+                "dew_a_power" => {
+                    info!("Updating DewA PWM");
+                    device.write().unwrap().set_dew_pwm(0, v)
+                }
+                "dew_b_power" => {
+                    info!("Updating DewB PWM");
+                    device.write().unwrap().set_dew_pwm(1, v)
+                }
+                _ => {
+                    warn!("Unknown property: {}", &req.prop_name[..]);
+                    Ok(())
+                }
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 #[tokio::main]
@@ -80,24 +205,11 @@ async fn main() {
     let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
     env_logger::init_from_env(env);
 
-    let driver = PPBADriver::new();
-
-    if driver.devices.is_empty() {
-        warn!("No PPBA found on the system, exiting");
-        std::process::exit(0)
-    }
-
     let mut mqttoptions = MqttOptions::new("pegasus_ppba", "127.0.0.1", 1883);
     mqttoptions.set_keep_alive(Duration::from_secs(5));
     let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
 
-    let mut devices_id = Vec::with_capacity(driver.devices.len());
-
-    for (_, d) in driver.devices.iter() {
-        devices_id.push(d.read().unwrap().id)
-    }
-
-    subscribe(client.clone(), &devices_id).await.unwrap();
+    let mut driver = PPBADriver::new(client.clone());
 
     match eventloop.poll().await {
         Err(rumqttc::ConnectionError::ConnectionRefused(_))
@@ -123,32 +235,9 @@ async fn main() {
         std::process::exit(0);
     });
 
-    for (_, d) in driver.devices.iter() {
-        let device = Arc::clone(d);
-        let c = client.clone();
-        task::spawn(async move {
-            let d_id = device.read().unwrap().id;
-            loop {
-                let now = Instant::now();
-                device.write().unwrap().fetch_props();
-                let serialized = serde_json::to_string(&*device.read().unwrap()).unwrap();
-                c.publish(
-                    format!("{}", format_args!("devices/{}", &d_id)),
-                    QoS::AtLeastOnce,
-                    false,
-                    serialized,
-                )
-                .await
-                .unwrap();
-                let elapsed = now.elapsed();
-                info!("Refreshed and publishing state took: {:.2?}", elapsed);
-                tokio::time::sleep(Duration::from_millis(5000)).await;
-            }
-        });
-    }
-
     while let Ok(event) = eventloop.poll().await {
         debug!("Received = {:?}", event);
+
         match event {
             Incoming(inc) => match inc {
                 Publish(data) => {
@@ -156,46 +245,37 @@ async fn main() {
                     // take advantage of this fact and avoid a string split
                     let device_id = &data.topic[8..44];
                     let topic = &data.topic[45..data.topic.len()];
-                    let device = driver.devices.get(device_id).unwrap();
-                    match topic {
-                        "update" => {
-                            let req: UpdatePropertyRequest =
-                                serde_json::from_slice(&data.payload).unwrap();
+                    let device = driver.devices.get(device_id).unwrap().clone();
 
-                            match req.value {
-                                PropValue::Bool(v) => {
-                                    info!("Received bool: {:?}", req);
-                                    match &req.prop_name[..] {
-                                        "quadport_status" => {
-                                            info!("Updating quadport_status");
-                                            device.write().unwrap().set_adjustable_output(v);
-                                        }
-					"reboot" => {
-					    info!("Issuing a reboot");
-					    device.write().unwrap().reboot();
-					}
-                                        _ => (),
+                    if topic == "update" {
+                        let req: UpdatePropertyRequest =
+                            serde_json::from_slice(&data.payload).unwrap();
+                        match update_property(&req, device) {
+                            Ok(()) => (),
+                            Err(e) => {
+                                error!("Update error: {e:?}");
+                                match e {
+                                    LightspeedError::IoError(ref _i) => {
+                                        driver.remove_device(&device_id);
                                     }
+                                    _ => (),
                                 }
-                                PropValue::Int(v) => {
-                                    info!("Received Number: {:?}", req);
-                                    match &req.prop_name[..] {
-                                        "dew_a_power" => {
-                                            info!("Updating DewA PWM");
-                                            device.write().unwrap().set_dew_pwm(0, v);
-                                        }
-                                        "dew_b_power" => {
-                                            info!("Updating DewB PWM");
-                                            device.write().unwrap().set_dew_pwm(1, v);
-                                        }
-                                        _ => (),
-                                    }
+                                if notify_update_error(client.clone(), device_id, &req, e)
+                                    .await
+                                    .is_err()
+                                {
+                                    log::error!("Failed to send error message to broker")
                                 }
-                                _ => (),
                             }
                         }
-                        _ => (),
-                    }
+                    } else if topic == "delete" {
+                        info!("Delete message received");
+                        driver.remove_device(&device_id);
+                    } else if topic == "new" {
+                        info!("Found new device");
+                    } else {
+                        warn!("Topic not managed: {}", &topic);
+                    };
                 }
                 _ => debug!("Incoming event: {:?}", inc),
             },
