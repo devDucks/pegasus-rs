@@ -1,7 +1,7 @@
 use astrotools::properties::{Permission, Prop, Property, PropertyErrorType};
 use astrotools::LightspeedError;
 use hex::FromHex;
-use log::{debug, info};
+use log::{debug, error, info};
 use serde::Serialize;
 #[cfg(windows)]
 use serialport::COMPort;
@@ -90,7 +90,12 @@ trait Pegasus {
 }
 
 impl PegasusPowerBox {
-    pub fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Self {
+    pub fn new(
+        name: &str,
+        address: &str,
+        baud: u32,
+        timeout_ms: u64,
+    ) -> Result<Self, LightspeedError> {
         let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
 
         if let Ok(port_) = builder.open_native() {
@@ -126,14 +131,16 @@ impl PegasusPowerBox {
                 Ok(_) => {
                     dev.update_firmware_version();
                     let _ = dev.fetch_props();
-                    dev
+                    Ok(dev)
                 }
-                Err(_) => {
-                    panic!("Cannot connect to device");
+                Err(e) => {
+                    error!("Cannot connect to device");
+                    Err(e)
                 }
             }
         } else {
-            panic!("Cannot connect to device");
+            error!("Cannot connect to device, maybe is it opened in another process?");
+            Err(LightspeedError::DeviceConnectionError)
         }
     }
 

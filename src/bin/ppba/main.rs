@@ -45,13 +45,18 @@ impl PPBADriver {
     }
 
     fn add_device(&mut self, device_name: &String, port: &String) {
-        let device: PegasusPowerBox = PegasusPowerBox::new(&device_name, port, 9600, 500);
-        info!("New device discovered: {}", &device_name);
-        let id = device.id.to_string().clone();
-        self.devices
-            .insert(device.id.to_string(), Arc::new(RwLock::new(device)));
-        let _ = self.subscribe(&id);
-        self.start_loop(&id);
+        let id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, device_name.as_bytes()).to_string();
+
+        if !self.devices.contains_key(&id) {
+            if let Ok(device) = PegasusPowerBox::new(&device_name, port, 9600, 500) {
+                info!("New device discovered: {}", &device_name);
+                let id = device.id.to_string().clone();
+                self.devices
+                    .insert(device.id.to_string(), Arc::new(RwLock::new(device)));
+                let _ = self.subscribe(&id);
+                self.start_loop(&id);
+            }
+        }
     }
 
     fn start_loop(&self, device_id: &String) {
@@ -109,10 +114,7 @@ impl PPBADriver {
                 )
                 .await;
             let _ = client
-                .subscribe(
-                    format!("{}", format_args!("devices/{}/new", &d_id)),
-                    QoS::ExactlyOnce,
-                )
+                .subscribe(String::from("devices/ppba/new"), QoS::ExactlyOnce)
                 .await;
         });
         Ok(())
@@ -121,17 +123,10 @@ impl PPBADriver {
     fn find_devices(&mut self) {
         let found = look_for_devices("PPBA");
         for dev in found {
-            let mut device_name = String::from("PegausPowerBoxAdvanced");
-            debug!("name: {}", dev.0);
-            debug!("info: {:?}", dev.1);
-
-            if let Some(serial) = dev.1.serial_number {
-                device_name = device_name + "-" + &serial
-            }
-
-            if !self.devices.contains_key(&device_name) {
-                self.add_device(&device_name, &dev.0);
-            }
+            let serial = dev.1.serial_number.clone().unwrap();
+            let device_name = format!("PegausPowerBoxAdvanced-{}", &serial);
+            debug!("info: {:?}", &dev);
+            self.add_device(&device_name, &dev.0);
         }
     }
 }
