@@ -16,6 +16,7 @@ use tokio::{signal, task};
 use astrotools::properties::{PropValue, UpdatePropertyRequest};
 use astrotools::LightspeedError;
 use rumqttc::ClientError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 type PPBA = Arc<RwLock<PegasusPowerBox>>;
@@ -131,6 +132,28 @@ impl PPBADriver {
     }
 }
 
+async fn find_devices(client: AsyncClient) {
+    let found = look_for_devices("PPBA");
+    for dev in found {
+        let serial = dev.1.serial_number.clone().unwrap();
+        let device_name = format!("PegausPowerBoxAdvanced-{}", &serial);
+        debug!("info: {:?}", &dev);
+        client
+            .publish(
+                String::from("devices/ppba/new"),
+                QoS::AtLeastOnce,
+                false,
+                serde_json::to_vec(&serde_json::json!({
+                "device_name": &device_name,
+                "port": &dev.0
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+}
+
 async fn notify_update_error(
     client: AsyncClient,
     id: &str,
@@ -194,6 +217,12 @@ fn update_property(req: &UpdatePropertyRequest, device: PPBA) -> Result<(), Ligh
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct NewDevice {
+    device_name: String,
+    port: String,
+}
+
 #[tokio::main]
 async fn main() {
     //    console_subscriber::init();
@@ -230,47 +259,59 @@ async fn main() {
         std::process::exit(0);
     });
 
+    let f_client = client.clone();
+    tokio::spawn(async move {
+        let c = f_client.clone();
+        loop {
+            find_devices(c.clone()).await;
+            tokio::time::sleep(Duration::from_millis(5000)).await;
+        }
+    });
+
     while let Ok(event) = eventloop.poll().await {
         debug!("Received = {:?}", event);
 
         match event {
             Incoming(inc) => match inc {
                 Publish(data) => {
-                    // All topics are in the form of devices/{UUID}/{action} so let's
-                    // take advantage of this fact and avoid a string split
-                    let device_id = &data.topic[8..44];
-                    let topic = &data.topic[45..data.topic.len()];
-                    let device = driver.devices.get(device_id).unwrap().clone();
+                    if &data.topic[&data.topic.len() - 3..] == "new" {
+                        let req: NewDevice = serde_json::from_slice(&data.payload).unwrap();
+                        driver.add_device(&req.device_name, &req.port);
+                    } else {
+                        // All topics are in the form of devices/{UUID}/{action} so let's
+                        // take advantage of this fact and avoid a string split
+                        let device_id = &data.topic[8..44];
+                        let topic = &data.topic[45..data.topic.len()];
+                        let device = driver.devices.get(device_id).unwrap().clone();
 
-                    if topic == "update" {
-                        let req: UpdatePropertyRequest =
-                            serde_json::from_slice(&data.payload).unwrap();
-                        match update_property(&req, device) {
-                            Ok(()) => (),
-                            Err(e) => {
-                                error!("Update error: {e:?}");
-                                match e {
-                                    LightspeedError::IoError(ref _i) => {
-                                        driver.remove_device(&device_id);
+                        if topic == "update" {
+                            let req: UpdatePropertyRequest =
+                                serde_json::from_slice(&data.payload).unwrap();
+                            match update_property(&req, device) {
+                                Ok(()) => (),
+                                Err(e) => {
+                                    error!("Update error: {e:?}");
+                                    match e {
+                                        LightspeedError::IoError(ref _i) => {
+                                            driver.remove_device(&device_id);
+                                        }
+                                        _ => (),
                                     }
-                                    _ => (),
-                                }
-                                if notify_update_error(client.clone(), device_id, &req, e)
-                                    .await
-                                    .is_err()
-                                {
-                                    log::error!("Failed to send error message to broker")
+                                    if notify_update_error(client.clone(), device_id, &req, e)
+                                        .await
+                                        .is_err()
+                                    {
+                                        log::error!("Failed to send error message to broker")
+                                    }
                                 }
                             }
-                        }
-                    } else if topic == "delete" {
-                        info!("Delete message received");
-                        driver.remove_device(&device_id);
-                    } else if topic == "new" {
-                        info!("Found new device");
-                    } else {
-                        warn!("Topic not managed: {}", &topic);
-                    };
+                        } else if topic == "delete" {
+                            info!("Delete message received");
+                            driver.remove_device(&device_id);
+                        } else {
+                            warn!("Topic not managed: {}", &topic);
+                        };
+                    }
                 }
                 _ => debug!("Incoming event: {:?}", inc),
             },
