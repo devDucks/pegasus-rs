@@ -1,34 +1,4 @@
 [workspace]
-members = [".", "libpegasus"]
+resolver = "3"
+members = ["libpegasus", "ppba-lightspeed"]
 
-[package]
-name = "pegasus_astro"
-version = "0.2.0"
-edition = "2021"
-license = "GPL-3.0-or-later"
-repository = "https://github.com/devDucks/pegasus-rs/"
-readme = "README.md"
-description = "Multiplatform drivers for PegasusAstro equipment with a bit of gRPC"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-astrotools = "0.11"
-hex = "0.4"
-serialport = "4.3"
-log = "0.4"
-env_logger = "0.11"
-serde_json = "1.0.115"
-serde = { version = "1.0.197", features = ["derive"] }
-rumqttc = "0.25"
-libpegasus = { path = "libpegasus" }
-
-[dependencies.uuid]
-version = "1"
-features = [
-    "v4",
-    "fast-rng",
-]
-
-[profile.release]
-debug = true

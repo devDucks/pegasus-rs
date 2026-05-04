@@ -1,10 +1,10 @@
+use astrotools::LightspeedError;
 use astrotools::device::{DeviceType, LightspeedDevice};
 use astrotools::properties::{
     Permission, Prop, PropValue, Property, PropertyErrorType, UpdatePropertyRequest,
 };
-use astrotools::LightspeedError;
-use libpegasus::ppba::Ppba;
 use libpegasus::PegasusError;
+use libpegasus::ppba::Ppba;
 use log::{error, info};
 use serde::Serialize;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -198,7 +198,7 @@ impl PegasusPowerBox {
                     _ => {
                         return Err(LightspeedError::PropertyError(
                             PropertyErrorType::InvalidValue,
-                        ))
+                        ));
                     }
                 };
                 self.ppba

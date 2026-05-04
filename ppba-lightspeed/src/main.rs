@@ -2,8 +2,7 @@ use astrotools::find_serial_devices;
 use env_logger::Env;
 use log::{error, warn};
 
-pub mod ppba;
-use ppba::PegasusPowerBox;
+use ppba_lightspeed::PegasusPowerBox;
 
 fn main() {
     env_logger::init_from_env(Env::default().filter_or("LS_LOG_LEVEL", "info"));
