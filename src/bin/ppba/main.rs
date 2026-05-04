@@ -1,161 +1,37 @@
-use log::{debug, error, info, warn};
+use env_logger::Env;
+use log::{error, warn};
+use pegasus_astro::utils::look_for_devices;
 
 pub mod ppba;
-use env_logger::Env;
-use pegasus_astro::utils::look_for_devices;
 use ppba::PegasusPowerBox;
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
 
-use rumqttc::Event::{Incoming, Outgoing};
-use rumqttc::Packet::Publish;
-use rumqttc::{AsyncClient, MqttOptions, QoS};
+fn main() {
+    env_logger::init_from_env(Env::default().filter_or("LS_LOG_LEVEL", "info"));
 
-use tokio::{signal, task};
-use uuid::Uuid;
-
-use rumqttc::ClientError;
-
-type PPBA = Arc<RwLock<PegasusPowerBox>>;
-
-#[derive(Default, Clone)]
-struct PPBADriver {
-    devices: Vec<PPBA>,
-}
-
-impl PPBADriver {
-    fn new() -> Self {
-        let found = look_for_devices("PPBA");
-        let mut devices: Vec<PPBA> = Vec::new();
-
-        for dev in found {
-            let mut device_name = String::from("PegausPowerBoxAdvanced");
-            debug!("name: {}", dev.0);
-            debug!("info: {:?}", dev.1);
-
-            if let Some(serial) = dev.1.serial_number {
-                device_name = device_name + "-" + &serial
+    let devices: Vec<PegasusPowerBox> = look_for_devices("PPBA")
+        .into_iter()
+        .filter_map(|(port, info)| {
+            let mut name = "PegasusPowerBoxAdvanced".to_string();
+            if let Some(serial) = info.serial_number {
+                name = name + "-" + &serial;
             }
-            let device = Arc::new(RwLock::new(PegasusPowerBox::new(
-                &device_name,
-                &dev.0,
-                9600,
-                500,
-            )));
-            devices.push(device);
-        }
-        Self { devices }
-    }
-}
+            PegasusPowerBox::new(&name, &port, 9600, 500)
+                .map_err(|e| error!("Skipping {port}: {e}"))
+                .ok()
+        })
+        .collect();
 
-async fn subscribe(client: AsyncClient, ids: &Vec<Uuid>) -> Result<(), ClientError> {
-    for id in ids {
-        client
-            .subscribe(
-                format!("{}", format_args!("devices/{}/update", &id)),
-                QoS::ExactlyOnce,
-            )
-            .await?
-    }
-
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() {
-    //    console_subscriber::init();
-    let env = Env::default().filter_or("LS_LOG_LEVEL", "info");
-    env_logger::init_from_env(env);
-
-    let driver = PPBADriver::new();
-
-    if driver.devices.is_empty() {
+    if devices.is_empty() {
         warn!("No PPBA found on the system, exiting");
-        std::process::exit(0)
-    }
-
-    let mut mqttoptions = MqttOptions::new("pegasus_ppba", "127.0.0.1", 1883);
-    mqttoptions.set_keep_alive(Duration::from_secs(5));
-    let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
-
-    let mut devices_id = Vec::with_capacity(driver.devices.len());
-
-    for d in &driver.devices {
-        devices_id.push(d.read().unwrap().id)
-    }
-
-    subscribe(client.clone(), &devices_id).await.unwrap();
-
-    match eventloop.poll().await {
-        Err(rumqttc::ConnectionError::ConnectionRefused(_))
-        | Err(rumqttc::ConnectionError::Io(_)) => {
-            error!("The MQTT broker is not avialble, aborting");
-            std::process::exit(0)
-        }
-        Err(e) => {
-            error!("An error occured: {} - aborting", e);
-            std::process::exit(0)
-        }
-        _ => (),
-    }
-
-    eventloop.network_options.set_connection_timeout(5);
-
-    let c_client = client.clone();
-
-    tokio::spawn(async move {
-        signal::ctrl_c().await.unwrap();
-        debug!("ctrl-c received!");
-        c_client.disconnect().await.unwrap();
         std::process::exit(0);
-    });
-
-    for d in &driver.devices {
-        let device = Arc::clone(d);
-        let c = client.clone();
-        task::spawn(async move {
-            let d_id = device.read().unwrap().id;
-            loop {
-                let now = Instant::now();
-                device.write().unwrap().fetch_props();
-                let serialized = serde_json::to_string(&*device.read().unwrap()).unwrap();
-                c.publish(
-                    format!("{}", format_args!("devices/{}", &d_id)),
-                    QoS::AtLeastOnce,
-                    false,
-                    serialized,
-                )
-                .await
-                .unwrap();
-                let elapsed = now.elapsed();
-                info!("Refreshed and publishing state took: {:.2?}", elapsed);
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        });
     }
 
-    while let Ok(event) = eventloop.poll().await {
-        debug!("Received = {:?}", event);
-        match event {
-            Incoming(inc) => match inc {
-                Publish(data) => {
-                    // All topics are in the form of devices/{UUID}/{action} so let's
-                    // take advantage of this fact and avoid a string split
-                    match &data.topic[45..data.topic.len()] {
-                        "update" => {
-                            info!(
-                                "received message from topic: {}\nmessage: {:?}",
-                                &data.topic, &data.payload
-                            );
-                        }
-                        _ => (),
-                    }
-                }
-                _ => debug!("Incoming event: {:?}", inc),
-            },
-            Outgoing(out) => {
-                debug!("Outgoing MQTT event: {:?}", out);
-            }
-        }
-    }
+    astrotools::runner::run(
+        devices,
+        astrotools::runner::RunnerConfig {
+            mqtt_client_id: "pegasus_ppba".to_string(),
+            tick_interval_ms: 500,
+            ..Default::default()
+        },
+    );
 }

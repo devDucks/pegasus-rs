@@ -1,4 +1,8 @@
-use astrotools::properties::{Permission, Prop, Property};
+use astrotools::device::{DeviceType, LightspeedDevice};
+use astrotools::properties::{
+    Permission, Prop, PropValue, Property, PropertyErrorType, UpdatePropertyRequest,
+};
+use astrotools::LightspeedError;
 use hex::FromHex;
 use log::{debug, error, info};
 use serde::Serialize;
@@ -8,13 +12,18 @@ use serialport::COMPort;
 use serialport::TTYPort;
 use std::fmt::UpperHex;
 use std::io::{Read, Write};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::Duration;
 use uuid::Uuid;
+
+enum PpbaCommand {
+    Update(UpdatePropertyRequest),
+}
 
 #[derive(Debug, Serialize)]
 pub struct PegasusPowerBox {
     #[serde(skip)]
-    pub id: Uuid,
+    id: Uuid,
     name: String,
     address: String,
     pub baud: u32,
@@ -45,6 +54,10 @@ pub struct PegasusPowerBox {
     uptime: Property<u32>,
     total_current: Property<f32>,
     current_12v_output: Property<f32>,
+    #[serde(skip)]
+    cmd_tx: SyncSender<PpbaCommand>,
+    #[serde(skip)]
+    cmd_rx: Receiver<PpbaCommand>,
 }
 
 enum Command {
@@ -80,79 +93,63 @@ trait Pegasus {
 }
 
 impl PegasusPowerBox {
-    pub fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Self {
-        let builder = serialport::new(address, baud).timeout(Duration::from_millis(timeout_ms));
+    pub fn new(name: &str, address: &str, baud: u32, timeout_ms: u64) -> Result<Self, String> {
+        let port_ = serialport::new(address, baud)
+            .timeout(Duration::from_millis(timeout_ms))
+            .open_native()
+            .map_err(|e| format!("Cannot open port {address}: {e}"))?;
 
-        if let Ok(port_) = builder.open_native() {
-            let mut dev = Self {
-                id: Uuid::new_v4(),
-                name: name.to_owned(),
-                address: address.to_owned(),
-                baud: baud,
-                port: port_,
-                fw_version: Property::<String>::new("UNKNOWN".to_string(), Permission::ReadOnly),
-                reboot: Property::<bool>::new(false, Permission::ReadWrite),
-                input_voltage: Property::<f32>::new(0.0, Permission::ReadOnly),
-                current: Property::<f32>::new(0.0, Permission::ReadOnly),
-                temperature: Property::<f32>::new(0.0, Permission::ReadOnly),
-                humidity: Property::<f32>::new(0.0, Permission::ReadOnly),
-                quadport_status: Property::<bool>::new(false, Permission::ReadWrite),
-                adj_output: Property::<u8>::new(0, Permission::ReadWrite),
-                adj_output_status: Property::<bool>::new(false, Permission::ReadWrite),
-                dew1_power: Property::<u8>::new(0, Permission::ReadWrite),
-                dew1_current: Property::<f32>::new(0.0, Permission::ReadOnly),
-                dew2_power: Property::<u8>::new(0, Permission::ReadWrite),
-                dew2_current: Property::<f32>::new(0.0, Permission::ReadOnly),
-                autodew: Property::<bool>::new(false, Permission::ReadWrite),
-                pwr_warn: Property::<bool>::new(false, Permission::ReadOnly),
-                average_amps: Property::<f32>::new(0.0, Permission::ReadOnly),
-                amps_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
-                watt_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
-                uptime: Property::<u32>::new(0, Permission::ReadOnly),
-                total_current: Property::<f32>::new(0.0, Permission::ReadOnly),
-                current_12v_output: Property::<f32>::new(0.0, Permission::ReadOnly),
-            };
-            match dev.send_command(Command::Status as i32, None) {
-                Ok(_) => {
-                    dev.update_firmware_version();
-                    dev.fetch_props();
-                    dev
-                }
-                Err(_) => {
-                    panic!("Cannot connect to device");
-                }
-            }
-        } else {
-            panic!("Cannot connect to device");
-        }
-    }
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<PpbaCommand>(32);
 
-    fn get_id(&self) -> Uuid {
-        self.id
-    }
+        let mut dev = Self {
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+            address: address.to_owned(),
+            baud,
+            port: port_,
+            fw_version: Property::<String>::new("UNKNOWN".to_string(), Permission::ReadOnly),
+            reboot: Property::<bool>::new(false, Permission::ReadWrite),
+            input_voltage: Property::<f32>::new(0.0, Permission::ReadOnly),
+            current: Property::<f32>::new(0.0, Permission::ReadOnly),
+            temperature: Property::<f32>::new(0.0, Permission::ReadOnly),
+            humidity: Property::<f32>::new(0.0, Permission::ReadOnly),
+            quadport_status: Property::<bool>::new(false, Permission::ReadWrite),
+            adj_output: Property::<u8>::new(0, Permission::ReadWrite),
+            adj_output_status: Property::<bool>::new(false, Permission::ReadWrite),
+            dew1_power: Property::<u8>::new(0, Permission::ReadWrite),
+            dew1_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+            dew2_power: Property::<u8>::new(0, Permission::ReadWrite),
+            dew2_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+            autodew: Property::<bool>::new(false, Permission::ReadWrite),
+            pwr_warn: Property::<bool>::new(false, Permission::ReadOnly),
+            average_amps: Property::<f32>::new(0.0, Permission::ReadOnly),
+            amps_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
+            watt_hours: Property::<f32>::new(0.0, Permission::ReadOnly),
+            uptime: Property::<u32>::new(0, Permission::ReadOnly),
+            total_current: Property::<f32>::new(0.0, Permission::ReadOnly),
+            current_12v_output: Property::<f32>::new(0.0, Permission::ReadOnly),
+            cmd_tx,
+            cmd_rx,
+        };
 
-    fn get_name(&self) -> &String {
-        &self.name
-    }
-
-    fn get_address(&self) -> &String {
-        &self.address
+        dev.send_command(Command::Status as i32, None)
+            .map_err(|e| format!("Status command failed: {e}"))?;
+        dev.update_firmware_version();
+        dev.fetch_props();
+        Ok(dev)
     }
 
     fn send_command<T>(&mut self, comm: T, val: Option<String>) -> Result<String, String>
     where
         T: UpperHex,
     {
-        // First convert the command into an hex STRING
         let mut hex_command = format!("{:X}", comm);
 
         if let Some(value) = val {
             hex_command += hex::encode(value).as_str();
         }
 
-        // Cast the hex string to a sequence of bytes
         let mut command: Vec<u8> = Vec::from_hex(hex_command).expect("Invalid Hex String");
-        // append \n at the end
         command.push(10);
 
         match self.port.write(&command) {
@@ -162,18 +159,14 @@ impl PegasusPowerBox {
                     std::str::from_utf8(&command[..command.len() - 1]).unwrap()
                 );
                 let mut final_buf: Vec<u8> = Vec::new();
-                debug!("Receiving data");
 
                 loop {
                     let mut read_buf = [0xA; 1];
-
                     match self.port.read(read_buf.as_mut_slice()) {
                         Ok(_) => {
                             let byte = read_buf[0];
-
                             final_buf.push(byte);
-
-                            if byte == '\n' as u8 {
+                            if byte == b'\n' {
                                 break;
                             }
                         }
@@ -183,11 +176,9 @@ impl PegasusPowerBox {
                         Err(e) => eprintln!("{:?}", e),
                     }
                 }
-                // Strip the carriage return from the response
                 let response = std::str::from_utf8(&final_buf[..&final_buf.len() - 2]).unwrap();
                 debug!("RESPONSE: {}", response);
-                let resp: Vec<&str> = response.split(":").collect();
-
+                let resp: Vec<&str> = response.split(':').collect();
                 if resp.len() > 1 && resp[1] == "ERR" {
                     Err("Invalid value".to_string())
                 } else {
@@ -208,60 +199,164 @@ impl PegasusPowerBox {
         self.update_power_metrics();
         self.update_power_and_sensor_readings();
     }
+
+    fn process_command(&mut self, cmd: PpbaCommand) {
+        match cmd {
+            PpbaCommand::Update(req) => {
+                if let Err(e) = self.handle_update(&req.prop_name, req.value) {
+                    error!("update '{}' failed: {:?}", req.prop_name, e);
+                }
+            }
+        }
+    }
+
+    fn handle_update(&mut self, prop_name: &str, val: PropValue) -> Result<(), LightspeedError> {
+        match prop_name {
+            "dew1_power" => {
+                let v = u32::try_from(val)? as u8;
+                self.send_command(Command::Dew1Power as i32, Some(v.to_string()))
+                    .map_err(|_| LightspeedError::DeviceConnectionError)?;
+                let _ = self.dew1_power.update_int(v);
+                Ok(())
+            }
+            "dew2_power" => {
+                let v = u32::try_from(val)? as u8;
+                self.send_command(Command::Dew2Power as i32, Some(v.to_string()))
+                    .map_err(|_| LightspeedError::DeviceConnectionError)?;
+                let _ = self.dew2_power.update_int(v);
+                Ok(())
+            }
+            "adj_output" => {
+                let v = u32::try_from(val)? as u8;
+                self.send_command(Command::Adj12VOutput as i32, Some(v.to_string()))
+                    .map_err(|_| LightspeedError::DeviceConnectionError)?;
+                let _ = self.adj_output.update_int(v);
+                Ok(())
+            }
+            "quadport_status" => {
+                let v = match val {
+                    PropValue::Bool(b) => b,
+                    PropValue::Int(i) => i != 0,
+                    _ => {
+                        return Err(LightspeedError::PropertyError(
+                            PropertyErrorType::InvalidValue,
+                        ))
+                    }
+                };
+                let arg = if v { "1".to_string() } else { "0".to_string() };
+                self.send_command(Command::QuadPortStatus as i32, Some(arg))
+                    .map_err(|_| LightspeedError::DeviceConnectionError)?;
+                let _ = self.quadport_status.update_int(v);
+                Ok(())
+            }
+            "reboot" => {
+                self.send_command(Command::Reboot as i32, None)
+                    .map_err(|_| LightspeedError::DeviceConnectionError)?;
+                Ok(())
+            }
+            _ => Err(LightspeedError::PropertyError(
+                PropertyErrorType::InvalidValue,
+            )),
+        }
+    }
 }
 
 impl Pegasus for PegasusPowerBox {
     fn update_firmware_version(&mut self) {
         if let Ok(fw) = self.send_command(Command::FirmwareVersion as i32, None) {
-            self.fw_version.update_int(fw.to_owned());
-        };
+            let _ = self.fw_version.update_int(fw);
+        }
     }
 
     fn update_power_consumption_and_stats(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerConsumAndStats as i32, None) {
             debug!("POWER CONSUMPTIONS STATS: {}", stats);
-            let chunks: Vec<&str> = stats.split(":").collect();
+            let chunks: Vec<&str> = stats.split(':').collect();
             let slice = chunks.as_slice();
-            // The response will be something like PS:averageAmps:ampHours:wattHours:uptime_in_milliseconds
-
-            self.current.update_int(slice[1].parse().unwrap());
-            self.amps_hours.update_int(slice[2].parse().unwrap());
-            self.watt_hours.update_int(slice[3].parse().unwrap());
-            self.uptime.update_int(slice[4].parse().unwrap());
+            // Response: PS:averageAmps:ampHours:wattHours:uptime_in_milliseconds
+            let _ = self.current.update_int(slice[1].parse().unwrap());
+            let _ = self.amps_hours.update_int(slice[2].parse().unwrap());
+            let _ = self.watt_hours.update_int(slice[3].parse().unwrap());
+            let _ = self.uptime.update_int(slice[4].parse().unwrap());
         } else {
             error!("Couldn't read power consumption metrics");
-        };
+        }
     }
 
     fn update_power_metrics(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerMetrics as i32, None) {
             debug!("POWER METRICS STATS:{}", stats);
-            let chunks: Vec<&str> = stats.split(":").collect();
-            let slice = &chunks.as_slice();
-
-            // The response is PC:total_current:current_12V_outputs:current_dewA:current_dewB:uptime_in_milliseconds
-            self.total_current.update_int(slice[1].parse().unwrap());
-            self.current_12v_output
+            let chunks: Vec<&str> = stats.split(':').collect();
+            let slice = chunks.as_slice();
+            // Response: PC:total_current:current_12V_outputs:current_dewA:current_dewB:uptime
+            let _ = self.total_current.update_int(slice[1].parse().unwrap());
+            let _ = self
+                .current_12v_output
                 .update_int(slice[2].parse().unwrap());
-            self.dew1_current.update_int(slice[3].parse().unwrap());
-            self.dew2_current.update_int(slice[4].parse().unwrap());
+            let _ = self.dew1_current.update_int(slice[3].parse().unwrap());
+            let _ = self.dew2_current.update_int(slice[4].parse().unwrap());
         } else {
             error!("Couldn't read power metrics stats");
-        };
+        }
     }
 
     fn update_power_and_sensor_readings(&mut self) {
         if let Ok(stats) = self.send_command(Command::PowerAndSensorReadings as i32, None) {
             debug!("POWER AND SENSORS READINGS: {}", stats);
-            let chunks: Vec<&str> = stats.split(":").collect();
+            let chunks: Vec<&str> = stats.split(':').collect();
             let slice = chunks.as_slice();
-
-            // The response is: PPBA:voltage:current_of_12V_outputs_:temp:humidity:dewpoint:quadport_status:adj_output_status:dewA_power:dewB_power:autodew_bool:pwr_warn:pwradj
-            self.input_voltage.update_int(slice[1].parse().unwrap());
-            self.current_12v_output
+            // Response: PPBA:voltage:current_12V:temp:humidity:dewpoint:quadport:adj_out:dewA:dewB:autodew:pwr_warn:pwradj
+            let _ = self.input_voltage.update_int(slice[1].parse().unwrap());
+            let _ = self
+                .current_12v_output
                 .update_int(slice[2].parse().unwrap());
         } else {
             error!("Couldn't read power and sensors reading");
         }
     }
+}
+
+impl LightspeedDevice for PegasusPowerBox {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn dev_type(&self) -> DeviceType {
+        DeviceType::PowerBox
+    }
+
+    fn command_topics(&self) -> &[&str] {
+        &["update"]
+    }
+
+    fn state_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    fn dispatcher(&self) -> Box<dyn Fn(&str, &[u8]) -> Result<(), LightspeedError> + Send + Sync> {
+        let tx = self.cmd_tx.clone();
+        Box::new(move |action, payload| match action {
+            "update" => {
+                let req: UpdatePropertyRequest =
+                    serde_json::from_slice(payload).map_err(|_| LightspeedError::ParseError)?;
+                tx.try_send(PpbaCommand::Update(req))
+                    .map_err(|_| LightspeedError::QueueFull)
+            }
+            _ => Err(LightspeedError::UnknownCommand),
+        })
+    }
+
+    fn tick(&mut self, state_tx: &SyncSender<(Uuid, String)>) {
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            self.process_command(cmd);
+        }
+        self.fetch_props();
+        state_tx.try_send((self.id, self.state_json())).ok();
+    }
+
+    fn close(&mut self) {}
 }
