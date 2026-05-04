@@ -364,6 +364,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "libpegasus"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "log",
+ "serialport",
+]
+
+[[package]]
 name = "libudev"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -482,6 +491,7 @@ dependencies = [
  "astrotools",
  "env_logger",
  "hex",
+ "libpegasus",
  "log",
  "rumqttc",
  "serde",

@@ -16,7 +16,7 @@ fn main() {
                 name = name + "-" + &serial;
             }
             PegasusPowerBox::new(&name, &port, 9600, 500)
-                .map_err(|e| error!("Skipping {port}: {e}"))
+                .map_err(|_| error!("Skipping {port}"))
                 .ok()
         })
         .collect();
