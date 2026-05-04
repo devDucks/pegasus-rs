@@ -1,0 +1,205 @@
+Pocket Powerbox Advance
+Serial Command Language
+Firmware >=v 2.9.x (reviewed Oct 2023)
+Abbreviations used:
+nnnn.. = one or more digits
+b = Boolean (0 or 1 digit)
+Connection Settings: 9600, 8N1
+(All commands should be terminated by new line /n)
+Command
+Description
+Response
+P#
+Device Status
+PPBA_OK
+PE:bb
+Set Power Status on boot. 1st number represents
+the quad output. 2nd number represents the
+adjustable out output.
+(0=OFF, 1=ON).
+PE:1
+PE:99
+Report Power Status on boot. Ignore the last 2
+numbers.
+PE:nnnn
+P1:b
+ON/OFF Power 4x12V Outputs, (0=OFF, 1=ON)
+P1:b
+P2:n
+ON/OFF Adjustable Output, (0=OFF, 1=ON)
+n can also accept values of: 3, 5, 7 ,8, 9, 12 to
+adjust output to specific voltage (stored in EEPROM and
+retrieved during boot)
+P2:n
+P3:nnn
+PWM Duty Cycle Power % (DewA)
+[n=0-255] (0-100%)
+P3:nnn
+P4:nnn
+PWM Duty Cycle Power % (DewB)
+[n=0-255] (0-100%)
+P4:nnn
+PF
+Reboot Device, Reload Firmware
+[none]
+PA
+Print Power and Sensor Readings
+[Check table below]
+PS
+Prints Power Consumption Statistics
+PS : averageAmps : ampHours : wattHours
+: uptime_in_milliseconds
+PC
+Print Power Metrics
+*Current is represented in Amps and does not require
+conversion
+PC:total_current : current_12V_outputs :
+current_dewA : current_dewB : uptime_in_
+milliseconds
+PR
+Prints discovered I2C devices plugged to EXT port
+PR:HDC:DHT:XS
+if there is a discovered device command will
+output its name
+HDC = temp/humidity sensor TI HDC1050
+DHT =stock temp/humidity sensor AM2301
+XS: eXternal Motor (stepper) Controller
+DA
+Print Auto Dew Aggressiveness.
+from 0 to 255 (210 default value).
+A higher value sets higher power to dew heaters when humidity
+is at x level.
+DA:nnn
+PD:b
+Enable/Disable Auto Dew Feature (0=OFF, 1 =ON)
+PD:b
+PD:nnn
+Set Auto Dew Aggressiveness value [1-254]
+PD:nnn
+DS:b
+If set to 1: Store DewA,B ports current values into
+EEPROM and set a retrieval value, This value is
+considered during device boot.
+If set to 0: disable value retrieval on device boot.
+DS:b
+DS:99
+Read dew ports retrieve flag on device boot. 1=
+YES, 0 = NO.
+DS:1 or DS:0
+PV
+Firmware Version
+n.n.n
+PU:b
+Switch ON /OFF USB2 Hub
+(Controls dual USB2 ports only on PPBADV Gen2)
+PU:b
+PI
+Reset I2C channel
+PI:1
+CH:nn
+Calibrate Humidity Sensor.
+Set offset value (positive or negative)
+CH:nn
+CT:nn
+Calibrate Temperature Sensor.
+Set offset value (positive or negative)
+CT:nn
+CR
+Reads Calibration Offsets
+CR:temp_offset:humidity_offset
+PL:b
+ON/OFF Led Indicator (0=OFF, 1=ON)
+value is not stored in memory
+PL:b
+XS
+eXternal Motor Controller commands
+check table below
+Transmit: PA
+Receive: PPBA:12.2:0.5.22.2:45:17.2:1:1:120:130:1:0:1
+Meaning:
+PPBA:voltage:current_of_12V_outputs_:temp:humidity:dewpoint:quadport_status:adj_out
+put_status:dewA_power:dewB_power:autodew_bool:pwr_warn:pwradj
+PPBA
+Device Name
+voltage
+Input Voltage in Volts (decimal) e.g 12.2
+current
+Quad 12V output sens current 0-1024 (need to
+convert to Amps by dividing by 65
+*for compatibility issues with PPB.
+Better use output from PS command
+temp
+Temp in Celsius Degrees (decimal) e.g 23.2
+humidity
+Relative Humidity in % (integer) e.g 59
+dewpoint
+Dewpoint in Celsius Degrees (decimal) e.g 14.7
+quadport_status
+Boolean 0 or 1 (1 means port is ON, 0 means port is
+OFF)
+adj_output_status
+Adjustable Output. Boolean 0 or 1 (1 means port is
+ON, 0 means port is OFF)
+dewA_power
+Power of DewA channel - duty cycle 0-255
+dewB_power
+Power of DewB channel - duty cycle 0-255
+autodew_bool
+Boolean for autodew function (controls power of
+both Dew channels): 0 is OFF, 1 is ON
+pwr_warn
+Boolean. 1 means power alert (short wire detection
+/ output overload). This is a generic flag for any 12V
+and DewA, DewB power outputs.
+pwradj
+Adjustable Output: Selected voltage in EEPROM
+(3,5,7,8,9,12)
+eXternal Motor Controller (XMC) Command Set (through powerbox)
+Below command language should be given from the USB serial (9600/8N1) of the Powerbox.
+The I2C command language is not described here.
+XS:[command number]#value
+Command
+Description
+Response
+XS
+Status
+200 response = discovered
+000 response = non present
+E.g XS:200:0
+XS:1
+Motor is running (1) or is idle (0)
+XS:1#b
+XS:2
+Motor current position (long value)
+XS:2#nn...
+XS:3#nn..
+Move to position (long value)
+XS:3#nn
+XS:4#nn..
+Goto +steps from current position (long value)
+XS:4#nn..
+XS:5#nn..
+Set a new motor position (long value)
+XS:5#nn
+XS:6
+Halt motor
+XS:6#1
+XS:7#nn..
+Set / Get motor max speed
+XS:7#nn..
+XS:8#b
+Set motor reverse (0 = normal, 1= reverse)
+XS:8#b
+XS:9#n
+Set Microstepping drive
+1 = FULL
+2 = HALF
+3 = 1/4
+4 = 1/8
+XS:9#n
+XS:10#nn..
+Set Motor Backlash (enables backlash
+compensation). Set 0 disabled the backlash
+compensation
+XS:10#nn
+
