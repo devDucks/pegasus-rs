@@ -1,6 +1,6 @@
+use astrotools::find_serial_devices;
 use env_logger::Env;
 use log::{error, warn};
-use pegasus_astro::utils::look_for_devices;
 
 pub mod ppba;
 use ppba::PegasusPowerBox;
@@ -8,7 +8,7 @@ use ppba::PegasusPowerBox;
 fn main() {
     env_logger::init_from_env(Env::default().filter_or("LS_LOG_LEVEL", "info"));
 
-    let devices: Vec<PegasusPowerBox> = look_for_devices("PPBA")
+    let devices: Vec<PegasusPowerBox> = find_serial_devices("PPBA")
         .into_iter()
         .filter_map(|(port, info)| {
             let mut name = "PegasusPowerBoxAdvanced".to_string();

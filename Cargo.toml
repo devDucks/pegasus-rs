@@ -13,11 +13,11 @@ description = "Multiplatform drivers for PegasusAstro equipment with a bit of gR
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+astrotools = "0.11"
 hex = "0.4"
 serialport = "4.3"
 log = "0.4"
 env_logger = "0.11"
-astrotools = "0.10"
 serde_json = "1.0.115"
 serde = { version = "1.0.197", features = ["derive"] }
 rumqttc = "0.25"
